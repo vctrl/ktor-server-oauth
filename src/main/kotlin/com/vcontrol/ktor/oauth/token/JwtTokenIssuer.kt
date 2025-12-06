@@ -1,0 +1,73 @@
+package com.vcontrol.ktor.oauth.token
+
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
+import com.vcontrol.ktor.oauth.CryptoContext
+import com.vcontrol.ktor.oauth.session.SessionEncryption
+import java.util.*
+import kotlin.time.Duration
+
+/**
+ * JWT-based token issuer for access token creation.
+ * Uses HS256 signed JWTs.
+ *
+ * Token validation is handled by Ktor's jwt {} authentication provider.
+ * This class only handles token creation.
+ *
+ * Supports extensible claims via [TokenClaimsProvider] implementations.
+ */
+class JwtTokenIssuer(
+    val jwtIssuer: String = "ktor-oauth",
+    val crypto: CryptoContext,
+    private val claimsProviders: List<TokenClaimsProvider> = emptyList()
+) {
+    /** Algorithm for JWT signing/verification */
+    val algorithm: Algorithm = Algorithm.HMAC256(crypto.jwtSecret)
+
+    companion object {
+        val DEFAULT_EXPIRATION: kotlin.time.Duration = kotlin.time.Duration.parse("90d")
+    }
+
+    fun createAccessToken(
+        clientId: String,
+        clientName: String?,
+        expiration: Duration,
+        additionalClaims: Map<String, Any?> = emptyMap(),
+        encryptedClaims: Map<String, String> = emptyMap()
+    ): String {
+        val now = System.currentTimeMillis()
+
+        val builder = JWT.create()
+            .withIssuer(jwtIssuer)
+            .withClaim("client_id", clientId)
+            .withClaim("client_name", clientName)
+            .withIssuedAt(Date(now))
+
+        // ZERO = never expires (omit exp claim)
+        if (expiration.isPositive()) {
+            val expiresAt = Date(now + expiration.inWholeMilliseconds)
+            builder.withExpiresAt(expiresAt)
+        }
+
+        // Add provision-time claims (supports any serializable type)
+        if (additionalClaims.isNotEmpty()) {
+            builder.withPayload(additionalClaims)
+        }
+
+        // Add encrypted claims (encrypt with server key)
+        if (encryptedClaims.isNotEmpty()) {
+            val encryptionKey = Base64.getUrlEncoder().withoutPadding().encodeToString(crypto.claimEncryptKey)
+            for ((key, value) in encryptedClaims) {
+                builder.withClaim(key, SessionEncryption.encrypt(value, encryptionKey))
+            }
+        }
+
+        // Apply claims providers AFTER (can override provision claims)
+        // This ensures session_key from SessionKeyClaimsProvider can't be tampered
+        claimsProviders.forEach { provider ->
+            provider.addClaims(builder, clientId)
+        }
+
+        return builder.sign(algorithm)
+    }
+}

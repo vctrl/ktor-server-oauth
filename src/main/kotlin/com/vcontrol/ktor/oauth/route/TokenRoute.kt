@@ -96,13 +96,14 @@ private fun parseGrantType(value: String): GrantType = when (value) {
 private suspend fun RoutingContext.issueTokenResponse(
     tokenIssuer: JwtTokenIssuer,
     clientId: String,
+    jti: String,
     clientName: String?,
     scope: String?,
     expiration: Duration = JwtTokenIssuer.DEFAULT_EXPIRATION,
     additionalClaims: Map<String, Any?> = emptyMap(),
     encryptedClaims: Map<String, String> = emptyMap()
 ) {
-    val accessToken = tokenIssuer.createAccessToken(clientId, clientName, expiration, additionalClaims, encryptedClaims)
+    val accessToken = tokenIssuer.createAccessToken(clientId, jti, clientName, expiration, additionalClaims, encryptedClaims)
     // expiresIn: 0 means never expires (per OAuth spec, omit if infinite)
     val expiresIn = if (expiration.isPositive()) expiration.inWholeSeconds else null
 
@@ -179,9 +180,13 @@ private suspend fun RoutingContext.handleClientCredentialsGrant(
     val tokenIssuer = registry.getTokenIssuer()
         ?: error("Token issuer not configured")
 
+    // Generate jti for client_credentials grant (using provider or UUID default)
+    val jwtIdProvider = localAuthServer.jwtIdProvider
+    val jti = jwtIdProvider?.invoke(clientId) ?: UUID.randomUUID().toString()
+
     // Use auth server's token expiration if configured, else default from config
     val expiration = localAuthServer.tokenExpiration ?: serverConfig.tokenExpiration
-    issueTokenResponse(tokenIssuer, clientId, request.clientName, request.scope, expiration)
+    issueTokenResponse(tokenIssuer, clientId, jti, request.clientName, request.scope, expiration)
 }
 
 /**
@@ -258,8 +263,8 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
     val tokenIssuer = registry.getTokenIssuer()
         ?: error("Token issuer not configured")
 
-    // Pass provision claims from auth code to be embedded in the JWT
-    issueTokenResponse(tokenIssuer, clientId, request.clientName, authCode.scope, expiration, authCode.claims, authCode.encryptedClaims)
+    // Pass provision claims and jti from auth code to be embedded in the JWT
+    issueTokenResponse(tokenIssuer, clientId, authCode.jti, request.clientName, authCode.scope, expiration, authCode.claims, authCode.encryptedClaims)
 }
 
 /**

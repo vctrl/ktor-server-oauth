@@ -1,9 +1,11 @@
 package com.vcontrol.ktor.oauth.route
 
 import com.vcontrol.ktor.oauth.*
+import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
 import com.vcontrol.ktor.oauth.model.ProvisionSession
 import com.vcontrol.ktor.oauth.session.BearerSessionKeyAttributeKey
 import com.vcontrol.ktor.oauth.token.HmacToken
+import java.util.UUID
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -117,9 +119,17 @@ fun Route.provision(providerName: String? = null, block: ProvisionRouteBuilder.(
                             return@onCall
                         }
 
-                        // Create standalone session
+                        // Create standalone session with generated jti
+                        // For standalone, also use jwtIdProvider if configured
+                        val jwtIdProvider = app.oauthOrNull?.localAuthServer?.jwtIdProvider
+                        val jti = jwtIdProvider?.invoke(clientIdParam) ?: UUID.randomUUID().toString()
+
                         session = ProvisionSession(
-                            clientId = clientIdParam,
+                            identity = AuthorizationIdentity(
+                                clientId = clientIdParam,
+                                jti = jti,
+                                providerName = providerName
+                            ),
                             nextUrl = STANDALONE_MARKER
                         )
                         call.sessions.set(session)
@@ -139,7 +149,8 @@ fun Route.provision(providerName: String? = null, block: ProvisionRouteBuilder.(
                     call.attributes.put(ProvisionSessionKey, session)
 
                     // Set session key attribute so bearer sessions can resolve it during provision
-                    call.attributes.put(BearerSessionKeyAttributeKey, session.clientId)
+                    // Uses jti (JWT ID) for session key - safer than client_id which can be manipulated
+                    call.attributes.put(BearerSessionKeyAttributeKey, session.jti)
 
                 } catch (e: Exception) {
                     logger.error(e) { "Provision error" }

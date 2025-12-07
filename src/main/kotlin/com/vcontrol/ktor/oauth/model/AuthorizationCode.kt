@@ -7,6 +7,11 @@ package com.vcontrol.ktor.oauth.model
 data class AuthorizationCode(
     val code: String,
     val clientId: String,
+    /**
+     * JWT ID generated at start of authorization flow.
+     * Passed through to token issuance for session key continuity.
+     */
+    val jti: String,
     val redirectUri: String,
     val codeChallenge: String,
     val codeChallengeMethod: CodeChallengeMethod,

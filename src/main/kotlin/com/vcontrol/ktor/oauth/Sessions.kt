@@ -329,9 +329,10 @@ class OAuthSessionsPluginConfig {
 
     /**
      * JWT claim name to use as the session key.
-     * Default is "client_id".
+     * Default is "jti" (JWT ID) for per-token session isolation.
      *
      * Use this to key sessions by a different claim, such as:
+     * - "client_id" for shared sessions across all tokens for a client
      * - "tenant_id" for multi-tenant apps
      * - "user_id" or "sub" for user-scoped sessions
      * - Any custom claim from your provision flow
@@ -344,7 +345,7 @@ class OAuthSessionsPluginConfig {
      * }
      * ```
      */
-    var sessionKeyClaim: String = "client_id"
+    var sessionKeyClaim: String = "jti"
 
     /**
      * Custom resolver function for deriving the session key from a JWT payload.
@@ -401,8 +402,8 @@ class OAuthSessionsPluginConfig {
     }
 
     /**
-     * Register a session type that will be stored using clientId-based transport.
-     * Sessions are automatically associated with the authenticated client.
+     * Register a session type that will be stored using JWT ID (jti) based transport.
+     * Sessions are automatically associated with the specific JWT token by default.
      *
      * Example:
      * ```kotlin
@@ -427,10 +428,10 @@ class OAuthSessionsPluginConfig {
 }
 
 /**
- * OAuth.Sessions sub-plugin for configuring client-bound sessions.
+ * OAuth.Sessions sub-plugin for configuring token-bound sessions.
  *
  * This plugin extends Ktor's Sessions with OAuth-specific features:
- * - clientId-based session transport (sessions bound to authenticated clients)
+ * - JWT ID (jti) based session transport (sessions bound to individual tokens by default)
  * - Automatic session encryption with per-client keys (when using EncryptedDiskSessions)
  * - Internal OAuth flow cookies (auth_request, provision_session)
  *

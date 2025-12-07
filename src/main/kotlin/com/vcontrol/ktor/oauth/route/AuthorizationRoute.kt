@@ -1,6 +1,7 @@
 package com.vcontrol.ktor.oauth.route
 
 import com.vcontrol.ktor.oauth.oauth
+import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
 import com.vcontrol.ktor.oauth.model.AuthorizationRequest
 import com.vcontrol.ktor.oauth.model.AuthorizationResult
 import com.vcontrol.ktor.oauth.model.CodeChallengeMethod
@@ -8,6 +9,7 @@ import com.vcontrol.ktor.oauth.model.OAuthError
 import com.vcontrol.ktor.oauth.model.ResponseType
 import com.vcontrol.ktor.oauth.AuthorizationProvider
 import com.vcontrol.ktor.oauth.model.ProvisionSession
+import java.util.UUID
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.*
 import io.ktor.server.response.*
@@ -41,12 +43,13 @@ fun Routing.configureAuthorizationRoutes() {
         try {
             val params = call.request.queryParameters
             val savedRequest = call.sessions.get<AuthorizationRequest>()
+            val registry = application.oauth
 
             // Determine if this is a new request or returning from /provision
             val isReturningFromProvision = savedRequest != null && params["client_id"] == null
 
             val request: AuthorizationRequest
-            val providerName: String?
+            val identity: AuthorizationIdentity
             val provisionClaims: Map<String, Any?>
             val encryptedClaims: Map<String, String>
 
@@ -54,22 +57,20 @@ fun Routing.configureAuthorizationRoutes() {
                 // Returning from /provision - use saved request (includes provider) and clear it
                 call.sessions.clear<AuthorizationRequest>()
                 request = savedRequest!!
-                providerName = request.providerName
 
-                // Read claims from provision session and clear it
+                // Read identity, claims from provision session and clear it
                 val provisionSession = call.sessions.get<ProvisionSession>()
-                provisionClaims = provisionSession?.claims?.toClaimsMap() ?: emptyMap()
-                encryptedClaims = provisionSession?.encryptedClaims ?: emptyMap()
+                    ?: error("ProvisionSession missing after provision flow")
+                identity = provisionSession.identity
+                provisionClaims = provisionSession.claims.toClaimsMap()
+                encryptedClaims = provisionSession.encryptedClaims.toMap()
                 call.sessions.clear<ProvisionSession>()
             } else {
-                provisionClaims = emptyMap()
-                encryptedClaims = emptyMap()
                 // New authorization request - get resource from resource param (RFC 8707)
-                // The resource param is the resource name (e.g., "calendar")
-                providerName = params["resource"]
+                val providerName = params["resource"]
 
                 // Validate resource exists if specified
-                if (providerName != null && !application.oauth.authProviders.containsKey(providerName)) {
+                if (providerName != null && !registry.authProviders.containsKey(providerName)) {
                     call.respond(HttpStatusCode.BadRequest, OAuthError(
                         error = OAuthError.INVALID_REQUEST,
                         errorDescription = "Unknown resource: $providerName"
@@ -87,34 +88,47 @@ fun Routing.configureAuthorizationRoutes() {
                     scope = params["scope"],
                     providerName = providerName
                 )
+
+                // Generate jti upfront using configured provider or UUID default
+                val jwtIdProvider = registry.localAuthServer?.jwtIdProvider
+                val jti = jwtIdProvider?.invoke(request.clientId) ?: UUID.randomUUID().toString()
+
+                // Create immutable identity context for this authorization flow
+                identity = AuthorizationIdentity(
+                    clientId = request.clientId,
+                    jti = jti,
+                    providerName = providerName
+                )
+
+                provisionClaims = emptyMap()
+                encryptedClaims = emptyMap()
             }
 
             // Only redirect to provision if:
             // 1. Provision is configured for this provider
             // 2. This is NOT a return from /provision (we just completed provision)
-            if (!isReturningFromProvision && application.oauth.hasProvision(providerName)) {
-                // Save OAuth request (includes provider) and create ProvisionSession before redirecting
+            if (!isReturningFromProvision && registry.hasProvision(identity.providerName)) {
+                // Save OAuth request and create ProvisionSession with identity before redirecting
                 call.sessions.set(request)
                 call.sessions.set(ProvisionSession(
-                    clientId = request.clientId,
-                    nextUrl = serverConfig.endpoint(serverConfig.endpoints.authorize),
-                    providerName = providerName
+                    identity = identity,
+                    nextUrl = serverConfig.endpoint(serverConfig.endpoints.authorize)
                 ))
                 // Named providers have provision at /provision/{providerName}
                 val provisionEndpoint = serverConfig.endpoint(serverConfig.endpoints.provision)
-                val provisionPath = when (providerName) {
+                val provisionPath = when (identity.providerName) {
                     null -> provisionEndpoint
-                    else -> "$provisionEndpoint/$providerName"
+                    else -> "$provisionEndpoint/${identity.providerName}"
                 }
                 call.respondRedirect(provisionPath)
                 return@get
             }
 
             // Provision complete (or not required) - process authorization directly
-            // Pass provider context and provision claims for auth code storage
+            // Pass identity and provision claims for auth code storage
             handleAuthorizationResult(
-                authProvider.processAuthorization(request, provisionClaims, encryptedClaims),
-                request.clientId
+                authProvider.processAuthorization(request, identity, provisionClaims, encryptedClaims),
+                identity.clientId
             )
 
         } catch (e: Exception) {

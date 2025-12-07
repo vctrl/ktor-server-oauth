@@ -25,11 +25,12 @@ class JwtTokenIssuer(
     val algorithm: Algorithm = Algorithm.HMAC256(crypto.jwtSecret)
 
     companion object {
-        val DEFAULT_EXPIRATION: kotlin.time.Duration = kotlin.time.Duration.parse("90d")
+        val DEFAULT_EXPIRATION: Duration = Duration.parse("90d")
     }
 
     fun createAccessToken(
         clientId: String,
+        jti: String,
         clientName: String?,
         expiration: Duration,
         additionalClaims: Map<String, Any?> = emptyMap(),
@@ -39,6 +40,7 @@ class JwtTokenIssuer(
 
         val builder = JWT.create()
             .withIssuer(jwtIssuer)
+            .withJWTId(jti)
             .withClaim("client_id", clientId)
             .withClaim("client_name", clientName)
             .withIssuedAt(Date(now))

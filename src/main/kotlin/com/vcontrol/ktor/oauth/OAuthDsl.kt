@@ -20,6 +20,13 @@ typealias CredentialValidator = (clientId: String, clientSecret: String) -> Bool
 typealias ClientValidator = suspend (clientId: String) -> Boolean
 
 /**
+ * Type alias for JWT ID (jti) generation function.
+ * Called at the start of each authorization flow to generate a unique token ID.
+ * Takes clientId and returns a unique jti string.
+ */
+typealias JwtIdProvider = (clientId: String) -> String
+
+/**
  * Type alias for auth provider validation function (like Ktor's validate {}).
  * Called after JWT signature verification and global client check.
  * Return a Principal to allow access, or null to reject.

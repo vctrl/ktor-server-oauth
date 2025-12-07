@@ -19,7 +19,7 @@ internal val BearerSessionKeyAttributeKey = AttributeKey<String>("BearerSessionK
 /**
  * Session transport that derives session keys from bearer token claims.
  *
- * By default uses "client_id", but can be configured via [OAuthSessionsPluginConfig.sessionKeyClaim]
+ * By default uses "jti" (JWT ID), but can be configured via [OAuthSessionsPluginConfig.sessionKeyClaim]
  * or [OAuthSessionsPluginConfig.sessionKeyResolver].
  *
  * Resolves session key from multiple sources (in priority order):
@@ -47,13 +47,13 @@ class BearerSessionTransport : SessionTransport {
         // First try JWT principal (available in authenticated routes)
         val principal = call.principal<JWTPrincipal>()
         if (principal != null) {
-            // Use configured resolver if available, otherwise default to client_id
+            // Use configured resolver if available, otherwise default to jti
             val resolver = call.application.attributes.getOrNull(SessionKeyResolverKey)
             return if (resolver != null) {
                 resolver(principal.payload)
             } else {
-                // Default fallback to client_id
-                principal.payload.getClaim("client_id").asString()
+                // Default fallback to jti (JWT ID)
+                principal.payload.getClaim("jti").asString()
             }
         }
 

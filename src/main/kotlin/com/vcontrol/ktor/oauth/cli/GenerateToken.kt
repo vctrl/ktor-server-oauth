@@ -6,6 +6,7 @@ import com.vcontrol.ktor.oauth.token.HmacToken
 import com.vcontrol.ktor.oauth.token.TokenUtils
 import com.typesafe.config.ConfigFactory
 import io.ktor.server.config.*
+import java.util.UUID
 import kotlin.time.Duration
 
 /**
@@ -72,7 +73,8 @@ fun main(args: Array<String>) {
     val crypto = CryptoContext(secretFile)
     val tokenIssuer = JwtTokenIssuer(crypto = crypto)
     val finalClientId = clientId ?: TokenUtils.generateClientId()
-    val token = tokenIssuer.createAccessToken(finalClientId, clientName, expiration)
+    val jti = UUID.randomUUID().toString()
+    val token = tokenIssuer.createAccessToken(finalClientId, jti, clientName, expiration)
     val provisionToken = HmacToken.generate(finalClientId, crypto.jwtSecret)
 
     println("""

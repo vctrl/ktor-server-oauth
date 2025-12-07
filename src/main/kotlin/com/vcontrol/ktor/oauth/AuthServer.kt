@@ -53,6 +53,9 @@ class LocalAuthServerConfig(name: String? = null) : AuthServerConfig(name) {
     /** Client credentials validator for client_credentials grant */
     internal var clientCredentialsValidator: CredentialValidator? = null
 
+    /** Custom JWT ID provider for generating jti claims */
+    internal var jwtIdProvider: JwtIdProvider? = null
+
     /** Custom claims providers for JWT tokens */
     internal val claimsProviders = mutableListOf<TokenClaimsProvider>()
 
@@ -69,6 +72,26 @@ class LocalAuthServerConfig(name: String? = null) : AuthServerConfig(name) {
      */
     fun clientCredentials(validator: CredentialValidator) {
         clientCredentialsValidator = validator
+    }
+
+    /**
+     * Configure custom JWT ID (jti) generation.
+     * Called at the start of each authorization flow to generate a unique token ID.
+     * Default generates UUID if not configured.
+     *
+     * The jti is used for:
+     * - Session keying during provision (safer than client_id)
+     * - Token identity in the final JWT
+     * - Token revocation tracking
+     *
+     * Example:
+     * ```kotlin
+     * jwtId { clientId -> "${clientId}_${UUID.randomUUID()}" }
+     * jwtId { clientId -> tokenIdService.generateAndStore(clientId) }
+     * ```
+     */
+    fun jwtId(provider: JwtIdProvider) {
+        jwtIdProvider = provider
     }
 
     /**

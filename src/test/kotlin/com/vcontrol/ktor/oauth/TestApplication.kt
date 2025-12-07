@@ -1,6 +1,8 @@
 package com.vcontrol.ktor.oauth
 
 import com.vcontrol.ktor.oauth.route.provision
+import com.vcontrol.ktor.oauth.token.decryptClaim
+import com.vcontrol.ktor.oauth.crypto
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -30,6 +32,7 @@ fun Application.testModule() {
     install(Authentication) {
         oauthJwt()
         oauthJwt("test")
+        oauthJwt("enc-claim-test")
     }
 
     // Standard Ktor routing with provision and authenticate
@@ -56,7 +59,9 @@ fun Application.testModule() {
                     }
                     else -> {
                         sessions.set(TestSession(username, password))
-                        complete(claims = mapOf("username" to username))
+                        complete {
+                            withClaim("username", username)
+                        }
                     }
                 }
             }
@@ -64,7 +69,17 @@ fun Application.testModule() {
 
         provision("test") {
             handle {
-                complete(claims = mapOf("test_claim" to "working"))
+                complete {
+                    withClaim("test_claim", "working")
+                }
+            }
+        }
+
+        provision("enc-claim-test") {
+            handle {
+                complete {
+                    withEncryptedClaim("enc_claim", "my-secret-value")
+                }
             }
         }
 
@@ -84,6 +99,14 @@ fun Application.testModule() {
                     it.payload.getClaim("test_claim").asString()
                 }
                 call.respondText("got claims: $testClaim")
+            }
+        }
+
+        authenticate("enc-claim-test") {
+            get("/enc-test/whoami") {
+                val crypto = call.application.crypto
+                val decrypted = call.principal<JWTPrincipal>()?.payload?.decryptClaim("enc_claim", crypto)
+                call.respondText("got claims: $decrypted")
             }
         }
     }

@@ -1,7 +1,7 @@
 package com.vcontrol.ktor.oauth.model
 
+import com.vcontrol.ktor.oauth.token.ProvisionClaims
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 
 /**
  * Session state for the OAuth provision flow.
@@ -23,17 +23,11 @@ data class ProvisionSession(
     /** URL to redirect back to after provision completes */
     val nextUrl: String,
     /**
-     * Custom claims to embed in the JWT token.
-     * Set during provision via `call.tokenClaims["key"] = value`.
-     * Stored as JsonElement for serialization; use TokenClaimsMap wrapper for type-safe access.
+     * Claims to embed in the JWT token.
+     * Set during provision via complete { withClaim(...); withEncryptedClaim(...) }
+     * Encrypted claims are marked and encrypted at token creation time.
      */
-    val claims: MutableMap<String, JsonElement> = mutableMapOf(),
-    /**
-     * Encrypted claims to embed in the JWT token.
-     * Set during provision via `call.tokenClaims.encrypted["key"] = value`.
-     * Values are encrypted with the server key before being added to the JWT.
-     */
-    val encryptedClaims: MutableMap<String, String> = mutableMapOf()
+    val claims: ProvisionClaims = ProvisionClaims()
 ) {
     /** Client identifier - delegated from identity */
     val clientId: String get() = identity.clientId

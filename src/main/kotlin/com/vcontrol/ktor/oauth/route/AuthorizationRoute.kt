@@ -9,6 +9,7 @@ import com.vcontrol.ktor.oauth.model.OAuthError
 import com.vcontrol.ktor.oauth.model.ResponseType
 import com.vcontrol.ktor.oauth.AuthorizationProvider
 import com.vcontrol.ktor.oauth.model.ProvisionSession
+import com.vcontrol.ktor.oauth.token.ProvisionClaims
 import java.util.UUID
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.*
@@ -50,8 +51,7 @@ fun Routing.configureAuthorizationRoutes() {
 
             val request: AuthorizationRequest
             val identity: AuthorizationIdentity
-            val provisionClaims: Map<String, Any?>
-            val encryptedClaims: Map<String, String>
+            val claims: ProvisionClaims
 
             if (isReturningFromProvision) {
                 // Returning from /provision - use saved request (includes provider) and clear it
@@ -62,8 +62,7 @@ fun Routing.configureAuthorizationRoutes() {
                 val provisionSession = call.sessions.get<ProvisionSession>()
                     ?: error("ProvisionSession missing after provision flow")
                 identity = provisionSession.identity
-                provisionClaims = provisionSession.claims.toClaimsMap()
-                encryptedClaims = provisionSession.encryptedClaims.toMap()
+                claims = provisionSession.claims
                 call.sessions.clear<ProvisionSession>()
             } else {
                 // New authorization request - get resource from resource param (RFC 8707)
@@ -100,8 +99,7 @@ fun Routing.configureAuthorizationRoutes() {
                     providerName = providerName
                 )
 
-                provisionClaims = emptyMap()
-                encryptedClaims = emptyMap()
+                claims = ProvisionClaims()
             }
 
             // Only redirect to provision if:
@@ -125,9 +123,9 @@ fun Routing.configureAuthorizationRoutes() {
             }
 
             // Provision complete (or not required) - process authorization directly
-            // Pass identity and provision claims for auth code storage
+            // Pass identity and claims for auth code storage
             handleAuthorizationResult(
-                authProvider.processAuthorization(request, identity, provisionClaims, encryptedClaims),
+                authProvider.processAuthorization(request, identity, claims),
                 identity.clientId
             )
 

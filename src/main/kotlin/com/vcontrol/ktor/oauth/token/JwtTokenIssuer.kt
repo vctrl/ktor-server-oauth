@@ -33,8 +33,7 @@ class JwtTokenIssuer(
         jti: String,
         clientName: String?,
         expiration: Duration,
-        additionalClaims: Map<String, Any?> = emptyMap(),
-        encryptedClaims: Map<String, String> = emptyMap()
+        claims: ProvisionClaims = ProvisionClaims()
     ): String {
         val now = System.currentTimeMillis()
 
@@ -51,16 +50,21 @@ class JwtTokenIssuer(
             builder.withExpiresAt(expiresAt)
         }
 
-        // Add provision-time claims (supports any serializable type)
-        if (additionalClaims.isNotEmpty()) {
-            builder.withPayload(additionalClaims)
-        }
+        // Process claims - split into plain and encrypted
+        if (!claims.isEmpty()) {
+            val (plainClaims, encryptedClaims) = claims.processForToken(crypto)
 
-        // Add encrypted claims (encrypt with server key)
-        if (encryptedClaims.isNotEmpty()) {
-            val encryptionKey = Base64.getUrlEncoder().withoutPadding().encodeToString(crypto.claimEncryptKey)
-            for ((key, value) in encryptedClaims) {
-                builder.withClaim(key, SessionEncryption.encrypt(value, encryptionKey))
+            // Add plain claims
+            if (plainClaims.isNotEmpty()) {
+                builder.withPayload(plainClaims)
+            }
+
+            // Add encrypted claims (encrypt with server key)
+            if (encryptedClaims.isNotEmpty()) {
+                val encryptionKey = Base64.getUrlEncoder().withoutPadding().encodeToString(crypto.claimEncryptKey)
+                for ((key, value) in encryptedClaims) {
+                    builder.withClaim(key, SessionEncryption.encrypt(value, encryptionKey))
+                }
             }
         }
 

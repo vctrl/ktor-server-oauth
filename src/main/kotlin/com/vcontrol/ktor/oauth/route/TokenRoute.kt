@@ -10,6 +10,7 @@ import com.vcontrol.ktor.oauth.model.OAuthError
 import com.vcontrol.ktor.oauth.model.TokenRequest
 import com.vcontrol.ktor.oauth.model.TokenResponse
 import com.vcontrol.ktor.oauth.token.JwtTokenIssuer
+import com.vcontrol.ktor.oauth.token.ProvisionClaims
 import com.vcontrol.ktor.oauth.baseUrl
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -100,10 +101,9 @@ private suspend fun RoutingContext.issueTokenResponse(
     clientName: String?,
     scope: String?,
     expiration: Duration = JwtTokenIssuer.DEFAULT_EXPIRATION,
-    additionalClaims: Map<String, Any?> = emptyMap(),
-    encryptedClaims: Map<String, String> = emptyMap()
+    claims: ProvisionClaims = ProvisionClaims()
 ) {
-    val accessToken = tokenIssuer.createAccessToken(clientId, jti, clientName, expiration, additionalClaims, encryptedClaims)
+    val accessToken = tokenIssuer.createAccessToken(clientId, jti, clientName, expiration, claims)
     // expiresIn: 0 means never expires (per OAuth spec, omit if infinite)
     val expiresIn = if (expiration.isPositive()) expiration.inWholeSeconds else null
 
@@ -263,8 +263,8 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
     val tokenIssuer = registry.getTokenIssuer()
         ?: error("Token issuer not configured")
 
-    // Pass provision claims and jti from auth code to be embedded in the JWT
-    issueTokenResponse(tokenIssuer, clientId, authCode.jti, request.clientName, authCode.scope, expiration, authCode.claims, authCode.encryptedClaims)
+    // Pass claims from auth code to be embedded in the JWT
+    issueTokenResponse(tokenIssuer, clientId, authCode.jti, request.clientName, authCode.scope, expiration, authCode.claims)
 }
 
 /**

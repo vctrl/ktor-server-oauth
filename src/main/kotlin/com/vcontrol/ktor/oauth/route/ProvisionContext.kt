@@ -2,14 +2,14 @@ package com.vcontrol.ktor.oauth.route
 
 import com.vcontrol.ktor.oauth.OAuthDsl
 import com.vcontrol.ktor.oauth.model.ProvisionSession
+import com.vcontrol.ktor.oauth.token.ClaimsBuilder
+import com.vcontrol.ktor.oauth.token.ProvisionClaims
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.sessions.*
 import io.ktor.util.*
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
 
 /** Marker nextUrl for standalone provision (not from OAuth flow) */
 private const val STANDALONE_MARKER = "standalone://complete"
@@ -61,25 +61,26 @@ class ProvisionRoutingContext(
     /**
      * Complete the provision flow and redirect back to authorization.
      *
-     * @param claims Claims to embed in the access token (String, Int, Long, Double, Boolean, Instant)
-     * @param encryptedClaims Claims to encrypt with server key before embedding in token
+     * Use the builder to add claims to the access token:
+     * ```kotlin
+     * complete {
+     *     withClaim("username", "paul")
+     *     withEncryptedClaim("api_key", "secret-123")
+     * }
+     * ```
+     *
+     * Encrypted claims are stored securely and can be read using:
+     * ```kotlin
+     * val apiKey = call.principal<JWTPrincipal>()?.payload?.decryptClaim("api_key", crypto)
+     * ```
      */
-    suspend fun complete(
-        claims: Map<String, Any?> = emptyMap(),
-        encryptedClaims: Map<String, String> = emptyMap()
-    ) {
-        // Convert claims to JsonElement for storage
-        val jsonClaims = claims.mapValues { (_, value) -> value.toJsonElement() }
-            .filterValues { it != null }
-            .mapValues { it.value!! }
+    suspend fun complete(builder: ClaimsBuilder.() -> Unit = {}) {
+        val claimsBuilder = ClaimsBuilder().apply(builder)
+        val newClaims = ProvisionClaims.from(claimsBuilder.build())
 
-        // Update session with claims - create new mutable maps
-        val updatedClaims = session.claims.toMutableMap().apply { putAll(jsonClaims) }
-        val updatedEncryptedClaims = session.encryptedClaims.toMutableMap().apply { putAll(encryptedClaims) }
-        val updatedSession = session.copy(
-            claims = updatedClaims,
-            encryptedClaims = updatedEncryptedClaims
-        )
+        // Merge with existing claims
+        val mergedClaims = ProvisionClaims(session.claims.values + newClaims.values)
+        val updatedSession = session.copy(claims = mergedClaims)
 
         // Save session
         call.sessions.set(updatedSession)
@@ -110,37 +111,6 @@ class ProvisionRoutingContext(
         call.attributes.put(ProvisionCompletedKey, true)
     }
 }
-
-/**
- * Convert Any? to JsonElement for claim storage.
- */
-private fun Any?.toJsonElement(): JsonElement? = when (this) {
-    null -> null
-    is String -> JsonPrimitive(this)
-    is Int -> JsonPrimitive(this)
-    is Long -> JsonPrimitive(this)
-    is Double -> JsonPrimitive(this)
-    is Boolean -> JsonPrimitive(this)
-    is kotlin.time.Instant -> JsonPrimitive(this.toEpochMilliseconds())
-    else -> JsonPrimitive(this.toString())
-}
-
-/**
- * Convert JsonElement to native type for JWT payload.
- */
-private fun JsonPrimitive.toAny(): Any? = when {
-    isString -> content
-    content == "true" -> true
-    content == "false" -> false
-    content.contains('.') -> content.toDoubleOrNull() ?: content
-    else -> content.toLongOrNull() ?: content
-}
-
-/**
- * Convert a map of JsonElement claims to a map of native types for JWT payload.
- */
-fun Map<String, JsonElement>.toClaimsMap(): Map<String, Any?> =
-    mapValues { (it.value as? JsonPrimitive)?.toAny() }
 
 // ============================================================================
 // Provision Route DSL

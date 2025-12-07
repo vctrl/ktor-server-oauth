@@ -1,5 +1,6 @@
 package com.vcontrol.ktor.oauth
 
+import com.vcontrol.ktor.oauth.token.ProvisionClaims
 import com.vcontrol.ktor.oauth.token.TokenUtils
 import com.vcontrol.ktor.oauth.model.AuthorizationCode
 import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
@@ -36,15 +37,13 @@ class AuthorizationProvider(
      *
      * @param request OAuth authorization request parameters
      * @param identity Authorization identity (clientId, jti, providerName)
-     * @param provisionClaims Claims set during provision flow via call.tokenClaims
-     * @param encryptedClaims Claims set via call.tokenClaims.encrypted (encrypted at token creation)
+     * @param claims Claims from provision flow to embed in the token
      * @return AuthorizationResult indicating next action
      */
     fun processAuthorization(
         request: AuthorizationRequest,
         identity: AuthorizationIdentity,
-        provisionClaims: Map<String, Any?> = emptyMap(),
-        encryptedClaims: Map<String, String> = emptyMap()
+        claims: ProvisionClaims = ProvisionClaims()
     ): AuthorizationResult {
         // Validate OAuth parameters
         val validationResult = validateAuthorizationRequest(request)
@@ -52,8 +51,8 @@ class AuthorizationProvider(
             return validationResult
         }
 
-        // Generate authorization code with identity and provision claims
-        return generateAuthorizationCode(request, identity, provisionClaims, encryptedClaims)
+        // Generate authorization code with identity and claims
+        return generateAuthorizationCode(request, identity, claims)
     }
 
     /**
@@ -125,13 +124,12 @@ class AuthorizationProvider(
 
     /**
      * Generate authorization code and prepare redirect response.
-     * Includes identity and provision claims for token exchange.
+     * Includes identity and claims for token exchange.
      */
     private fun generateAuthorizationCode(
         request: AuthorizationRequest,
         identity: AuthorizationIdentity,
-        provisionClaims: Map<String, Any?>,
-        encryptedClaims: Map<String, String>
+        claims: ProvisionClaims
     ): AuthorizationResult {
         val authCode = TokenUtils.generateClientSecret()
         val now = System.currentTimeMillis() / 1000
@@ -147,8 +145,7 @@ class AuthorizationProvider(
             scope = request.scope,
             createdAt = now,
             providerName = identity.providerName,
-            claims = provisionClaims,
-            encryptedClaims = encryptedClaims
+            claims = claims
         )
 
         authCodeStorage.store(authorization)

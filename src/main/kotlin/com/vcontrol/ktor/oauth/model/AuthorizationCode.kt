@@ -1,5 +1,7 @@
 package com.vcontrol.ktor.oauth.model
 
+import com.vcontrol.ktor.oauth.token.ProvisionClaims
+
 /**
  * Authorization code storage (for authorization code flow with PKCE).
  * Includes provider context for token exchange.
@@ -25,13 +27,8 @@ data class AuthorizationCode(
      */
     val providerName: String? = null,
     /**
-     * Custom claims from provision flow to embed in the JWT token.
-     * Supports any JSON-compatible value (String, Number, Boolean, List, Map).
+     * Claims from provision flow to embed in the JWT token.
+     * Encrypted claims are marked and processed at token creation time.
      */
-    val claims: Map<String, Any?> = emptyMap(),
-    /**
-     * Encrypted claims from provision flow.
-     * Values are plaintext here; encrypted with server key during token creation.
-     */
-    val encryptedClaims: Map<String, String> = emptyMap()
+    val claims: ProvisionClaims = ProvisionClaims()
 )

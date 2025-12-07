@@ -1,6 +1,7 @@
 package com.vcontrol.ktor.oauth
 
 import com.vcontrol.ktor.oauth.model.AuthorizationServerMetadata
+import com.vcontrol.ktor.oauth.model.ClientRegistrationRequest
 import com.vcontrol.ktor.oauth.model.ClientRegistrationResponse
 import com.vcontrol.ktor.oauth.model.ProtectedResourceMetadata
 import com.vcontrol.ktor.oauth.model.TokenResponse
@@ -77,7 +78,10 @@ class OAuthFlowTest {
         // 4. Register client
         val registerResponse = httpClient.post("/register") {
             contentType(ContentType.Application.Json)
-            setBody("""{"client_name":"test-client","redirect_uris":["http://localhost/callback"]}""")
+            setBody(ClientRegistrationRequest(
+                clientName = "test-client",
+                redirectUris = listOf("http://localhost/callback")
+            ))
         }
         assertEquals(HttpStatusCode.Created, registerResponse.status)
         val clientInfo = registerResponse.body<ClientRegistrationResponse>()
@@ -180,9 +184,12 @@ class OAuthFlowTest {
         }
 
         // 1. Register client with resource=test
-        val registerResponse = httpClient.post("/register") {
+        val registerResponse = httpClient.post("/register?resource=test") {
             contentType(ContentType.Application.Json)
-            setBody("""{"client_name":"test-client","redirect_uris":["http://localhost/callback"],"resource":"test"}""")
+            setBody(ClientRegistrationRequest(
+                clientName = "test-client",
+                redirectUris = listOf("http://localhost/callback")
+            ))
         }
         assertEquals(HttpStatusCode.Created, registerResponse.status)
         val clientInfo = registerResponse.body<ClientRegistrationResponse>()
@@ -246,6 +253,95 @@ class OAuthFlowTest {
         assertEquals("got claims: working", whoamiResponse.bodyAsText())
     }
 
+    /**
+     * Test encrypted claims flow:
+     * 1. Register client with resource=enc-claim-test
+     * 2. Authorize and provision (sets encrypted claim)
+     * 3. Get token with embedded encrypted claim
+     * 4. Verify /enc-test/whoami can decrypt and return the claim value
+     */
+    @Test
+    fun `encrypted claims are stored and decrypted correctly`() = testApplication {
+        application {
+            testModule()
+        }
+
+        val httpClient = createClient {
+            install(HttpCookies)
+            install(ContentNegotiation) {
+                json(json)
+            }
+            followRedirects = false
+        }
+
+        // 1. Register client with resource=enc-claim-test
+        val registerResponse = httpClient.post("/register?resource=enc-claim-test") {
+            contentType(ContentType.Application.Json)
+            setBody(ClientRegistrationRequest(
+                clientName = "enc-test-client",
+                redirectUris = listOf("http://localhost/callback")
+            ))
+        }
+        assertEquals(HttpStatusCode.Created, registerResponse.status)
+        val clientInfo = registerResponse.body<ClientRegistrationResponse>()
+        val clientId = clientInfo.clientId
+        assertNotNull(clientId)
+
+        // 2. Generate PKCE
+        val codeVerifier = generateCodeVerifier()
+        val codeChallenge = generateCodeChallenge(codeVerifier)
+
+        // 3. Start authorization with resource=enc-claim-test
+        val authResponse = httpClient.get("/authorize") {
+            parameter("response_type", "code")
+            parameter("client_id", clientId)
+            parameter("redirect_uri", "http://localhost/callback")
+            parameter("code_challenge", codeChallenge)
+            parameter("code_challenge_method", "S256")
+            parameter("resource", "enc-claim-test")
+        }
+        assertEquals(HttpStatusCode.Found, authResponse.status)
+        val provisionRedirect = authResponse.headers[HttpHeaders.Location]
+        assertNotNull(provisionRedirect)
+        assertTrue(provisionRedirect.contains("provision"), "Expected redirect to provision path")
+
+        // 4. GET provision page (for "enc-claim-test" provider, uses handle{} which redirects immediately)
+        val provisionGetResponse = httpClient.get(provisionRedirect)
+        assertEquals(HttpStatusCode.Found, provisionGetResponse.status, "Expected redirect from provision handle{}")
+
+        // 5. Resume authorization - should redirect with code
+        val codeResponse = httpClient.get("/authorize")
+        assertEquals(HttpStatusCode.Found, codeResponse.status, "Expected redirect after authorize resume")
+        val callbackRedirect = codeResponse.headers[HttpHeaders.Location]
+        assertNotNull(callbackRedirect, "Expected Location header after authorize resume")
+
+        val code = extractCodeFromRedirectUrl(callbackRedirect)
+        assertNotNull(code, "Expected authorization code in redirect URL: $callbackRedirect")
+
+        // 6. Exchange code for token
+        val tokenResponse = httpClient.submitForm(
+            url = "/token",
+            formParameters = parameters {
+                append("grant_type", "authorization_code")
+                append("code", code)
+                append("client_id", clientId)
+                append("redirect_uri", "http://localhost/callback")
+                append("code_verifier", codeVerifier)
+            }
+        )
+        assertEquals(HttpStatusCode.OK, tokenResponse.status)
+        val tokenInfo = tokenResponse.body<TokenResponse>()
+        val accessToken = tokenInfo.accessToken
+        assertNotNull(accessToken)
+
+        // 7. Verify encrypted claim is decrypted correctly
+        val whoamiResponse = httpClient.get("/enc-test/whoami") {
+            bearerAuth(accessToken)
+        }
+        assertEquals(HttpStatusCode.OK, whoamiResponse.status)
+        assertEquals("got claims: my-secret-value", whoamiResponse.bodyAsText())
+    }
+
     @Test
     fun `provision form shows error for invalid password`() = testApplication {
         application {
@@ -263,7 +359,10 @@ class OAuthFlowTest {
         // Register client and start OAuth flow
         val registerResponse = httpClient.post("/register") {
             contentType(ContentType.Application.Json)
-            setBody("""{"client_name":"test-client","redirect_uris":["http://localhost/callback"]}""")
+            setBody(ClientRegistrationRequest(
+                clientName = "test-client",
+                redirectUris = listOf("http://localhost/callback")
+            ))
         }
         val clientId = registerResponse.body<ClientRegistrationResponse>().clientId
         val codeVerifier = generateCodeVerifier()

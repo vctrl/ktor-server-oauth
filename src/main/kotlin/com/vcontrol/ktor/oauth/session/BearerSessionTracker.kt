@@ -9,6 +9,7 @@ import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
 import kotlin.reflect.KClass
+import kotlin.time.Duration
 
 private val logger = KotlinLogging.logger {}
 
@@ -39,24 +40,28 @@ fun storageKey(sessionKey: String, sessionName: String): String = "$sessionKey:$
  * This tracker handles:
  * - Serialization/deserialization of session objects
  * - Encryption/decryption using session key from JWT (implicit: key present = encrypted)
+ * - TTL-based expiration via [SessionEnvelope]
  *
- * Uses Ktor's native [SessionStorage] interface. Session expiration/cleanup can be
- * managed externally using file timestamps (for directorySessionStorage).
+ * Sessions are wrapped in a [SessionEnvelope] that tracks creation time and expiration.
+ * Expiration is set once at creation and not extended on updates.
  *
  * @param S The session data class type (must be @Serializable)
  * @param type The KClass of the session type
  * @param storage Storage for persisting session data (any Ktor SessionStorage)
+ * @param ttl Time-to-live for sessions (from creation, not extended on update)
  * @param json Json instance for serialization
  */
 @OptIn(InternalSerializationApi::class)
 class BearerSessionTracker<S : Any>(
     private val type: KClass<S>,
     private val storage: SessionStorage,
+    private val ttl: Duration,
     private val json: Json = DefaultSessionJson
 ) : SessionTracker<S> {
 
     private val serializer = type.serializer()
     private val sessionName = type.java.name
+    private val envelopeSerializer = SessionEnvelope.serializer()
 
     /**
      * Load session from storage using the session key.
@@ -64,9 +69,12 @@ class BearerSessionTracker<S : Any>(
      * If a session encryption key exists in the request, the stored data is decrypted.
      * If no encryption key, the data is treated as plaintext.
      *
+     * Sessions are wrapped in a [SessionEnvelope] that tracks expiration.
+     * Returns null if the session has expired.
+     *
      * @param call The application call (used to get encryption key)
      * @param transport The session key string from [BearerSessionTransport]
-     * @return The deserialized session object, or null if not found
+     * @return The deserialized session object, or null if not found or expired
      */
     override suspend fun load(call: ApplicationCall, transport: String?): S? {
         val sessionKey = transport ?: return null
@@ -82,7 +90,7 @@ class BearerSessionTracker<S : Any>(
         // Check if we have an encryption key - if so, data is encrypted
         val encryptionKey = call.attributes.getOrNull(SessionKeyAttributeKey)
 
-        val sessionJson = if (encryptionKey != null) {
+        val envelopeJson = if (encryptionKey != null) {
             // Data is encrypted - decrypt it
             try {
                 SessionEncryption.decrypt(storedData, encryptionKey)
@@ -95,11 +103,37 @@ class BearerSessionTracker<S : Any>(
             storedData
         }
 
-        // Deserialize
-        return try {
-            json.decodeFromString(serializer, sessionJson)
+        // Deserialize envelope
+        val envelope = try {
+            json.decodeFromString(envelopeSerializer, envelopeJson)
         } catch (e: Exception) {
-            logger.error(e) { "Failed to deserialize session for $sessionKey" }
+            // Try legacy format (plain session without envelope) for migration
+            logger.debug { "Attempting legacy session format for $sessionKey" }
+            return try {
+                json.decodeFromString(serializer, envelopeJson)
+            } catch (e2: Exception) {
+                logger.error(e) { "Failed to deserialize session for $sessionKey" }
+                null
+            }
+        }
+
+        // Check expiration
+        if (envelope.isExpired()) {
+            logger.debug { "Session expired for $sessionKey (expired at ${envelope.expiresAt})" }
+            // Optionally clean up expired session
+            try {
+                storage.invalidate(key)
+            } catch (_: NoSuchElementException) {
+                // Already gone
+            }
+            return null
+        }
+
+        // Deserialize session data from envelope
+        return try {
+            json.decodeFromString(serializer, envelope.data)
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to deserialize session data for $sessionKey" }
             null
         }
     }
@@ -109,6 +143,10 @@ class BearerSessionTracker<S : Any>(
      *
      * If a session encryption key is available from the JWT, the session data
      * is encrypted before storage. Otherwise stored as plaintext.
+     *
+     * Sessions are wrapped in a [SessionEnvelope]. On first store, expiration
+     * is set based on TTL. On updates, the original expiration is preserved
+     * to prevent sessions from outliving their intended lifetime.
      *
      * @param call The application call (used to get encryption key)
      * @param value The session object to store
@@ -120,20 +158,71 @@ class BearerSessionTracker<S : Any>(
             ?: throw IllegalStateException("Cannot store session: no session key in context")
 
         val encryptionKey = call.attributes.getOrNull(SessionKeyAttributeKey)
+        val key = storageKey(sessionKey, sessionName)
 
-        // Serialize the session
-        val serialized = json.encodeToString(serializer, value)
+        // Check for existing envelope to preserve timestamps
+        val existingEnvelope = loadEnvelope(key, encryptionKey)
+
+        // Serialize the session data
+        val serializedData = json.encodeToString(serializer, value)
+
+        // Create envelope - preserve expiration if updating existing session
+        val now = System.currentTimeMillis()
+        val envelope = if (existingEnvelope != null) {
+            // Update: preserve original timestamps
+            SessionEnvelope(
+                data = serializedData,
+                createdAt = existingEnvelope.createdAt,
+                expiresAt = existingEnvelope.expiresAt
+            )
+        } else {
+            // New session: set expiration based on TTL
+            SessionEnvelope(
+                data = serializedData,
+                createdAt = now,
+                expiresAt = now + ttl.inWholeMilliseconds
+            )
+        }
+
+        // Serialize envelope
+        val envelopeJson = json.encodeToString(envelopeSerializer, envelope)
 
         // Encrypt if key available, otherwise store plaintext
         val dataToStore = if (encryptionKey != null) {
-            SessionEncryption.encrypt(serialized, encryptionKey)
+            SessionEncryption.encrypt(envelopeJson, encryptionKey)
         } else {
-            serialized
+            envelopeJson
         }
 
-        val key = storageKey(sessionKey, sessionName)
         storage.write(key, dataToStore)
         return sessionKey
+    }
+
+    /**
+     * Load existing envelope from storage (for preserving timestamps on update).
+     */
+    private suspend fun loadEnvelope(key: String, encryptionKey: String?): SessionEnvelope? {
+        val storedData = try {
+            storage.read(key)
+        } catch (e: NoSuchElementException) {
+            return null
+        }
+
+        val envelopeJson = if (encryptionKey != null) {
+            try {
+                SessionEncryption.decrypt(storedData, encryptionKey)
+            } catch (e: Exception) {
+                return null
+            }
+        } else {
+            storedData
+        }
+
+        return try {
+            json.decodeFromString(envelopeSerializer, envelopeJson)
+        } catch (e: Exception) {
+            null // Legacy format or corrupt data
+        }
     }
 
     /**

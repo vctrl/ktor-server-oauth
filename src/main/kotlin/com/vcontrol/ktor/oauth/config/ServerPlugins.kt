@@ -102,9 +102,14 @@ fun Application.configureOAuthSessions() {
     // Build storage instance for each block and collect session type mappings
     data class SessionTypeMapping(
         val type: KClass<*>,
-        val storage: SessionStorage
+        val storage: SessionStorage,
+        val ttl: kotlin.time.Duration
     )
     val sessionTypeMappings = mutableListOf<SessionTypeMapping>()
+
+    // Get config from registry for TTL fallback
+    val serverConfig = oauth.config.server
+    val defaultTtl = serverConfig.tokenExpiration  // Default: session TTL = token expiration
 
     for (block in sessionsBlocks) {
         @Suppress("UNCHECKED_CAST")
@@ -113,14 +118,18 @@ fun Application.configureOAuthSessions() {
             application = this@configureOAuthSessions
         )
 
-        // Map each session type to its storage
-        for ((sessionType, _) in block.sessionTypes) {
-            sessionTypeMappings.add(SessionTypeMapping(sessionType, storage))
+        // Map each session type to its storage with resolved TTL
+        for ((sessionType, typeConfig) in block.sessionTypes) {
+            // TTL resolution order: per-type > storage-level > token expiration
+            val resolvedTtl = typeConfig.ttl
+                ?: block.storageLevelTtl
+                ?: defaultTtl
+
+            sessionTypeMappings.add(SessionTypeMapping(sessionType, storage, resolvedTtl))
         }
     }
 
     // Get config from registry and application attributes
-    val serverConfig = oauth.config.server
     val pluginConfig = oauthPluginConfig
     val crypto = this@configureOAuthSessions.crypto
 
@@ -149,7 +158,7 @@ fun Application.configureOAuthSessions() {
 
         // 2. Register bearer token-bound session types
         for (mapping in sessionTypeMappings) {
-            bearerSession(mapping.type, mapping.storage)
+            bearerSession(mapping.type, mapping.storage, mapping.ttl)
         }
 
         // 3. Apply user's Ktor session configs (cookie<T>(), header<T>() from sessions { } block)

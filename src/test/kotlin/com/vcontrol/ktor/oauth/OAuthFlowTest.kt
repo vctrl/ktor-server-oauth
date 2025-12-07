@@ -28,6 +28,9 @@ class OAuthFlowTest {
         namingStrategy = JsonNamingStrategy.SnakeCase
     }
 
+    /** OAuth endpoints from config (respects routePrefix) */
+    private val endpoints = OAuthEndpoints()
+
     /**
      * Test the full OAuth 2.0 discovery and client registration flow:
      * 1. GET /whoami - Hit protected resource, get 401 with WWW-Authenticate header
@@ -62,13 +65,13 @@ class OAuthFlowTest {
         assertTrue(wwwAuth.contains("Bearer"), "Expected Bearer auth scheme")
 
         // 2. Discover authorization server via protected resource metadata
-        val resourceMetadataResponse = httpClient.get("/.well-known/oauth-protected-resource")
+        val resourceMetadataResponse = httpClient.get(endpoints.protectedResourceMetadata)
         assertEquals(HttpStatusCode.OK, resourceMetadataResponse.status)
         val resourceMetadata = resourceMetadataResponse.body<ProtectedResourceMetadata>()
         assertNotNull(resourceMetadata.authorizationServers.firstOrNull(), "Expected authorization server in metadata")
 
         // 3. Get authorization server metadata to discover endpoints
-        val authServerMetadataResponse = httpClient.get("/.well-known/oauth-authorization-server")
+        val authServerMetadataResponse = httpClient.get(endpoints.authServerMetadata)
         assertEquals(HttpStatusCode.OK, authServerMetadataResponse.status)
         val authServerMetadata = authServerMetadataResponse.body<AuthorizationServerMetadata>()
         assertNotNull(authServerMetadata.registrationEndpoint, "Expected registration endpoint")
@@ -76,7 +79,7 @@ class OAuthFlowTest {
         assertNotNull(authServerMetadata.tokenEndpoint, "Expected token endpoint")
 
         // 4. Register client
-        val registerResponse = httpClient.post("/register") {
+        val registerResponse = httpClient.post(endpoints.register) {
             contentType(ContentType.Application.Json)
             setBody(ClientRegistrationRequest(
                 clientName = "test-client",
@@ -93,7 +96,7 @@ class OAuthFlowTest {
         val codeChallenge = generateCodeChallenge(codeVerifier)
 
         // 6. Start authorization (should redirect to provision)
-        val authResponse = httpClient.get("/authorize") {
+        val authResponse = httpClient.get(endpoints.authorize) {
             parameter("response_type", "code")
             parameter("client_id", clientId)
             parameter("redirect_uri", "http://localhost/callback")
@@ -103,15 +106,15 @@ class OAuthFlowTest {
         assertEquals(HttpStatusCode.Found, authResponse.status)
         val provisionRedirect = authResponse.headers[HttpHeaders.Location]
         assertNotNull(provisionRedirect)
-        assertEquals("/provision", provisionRedirect)
+        assertEquals(endpoints.provision, provisionRedirect)
 
         // 7. GET provision page (shows provision form)
-        val provisionGetResponse = httpClient.get("/provision")
+        val provisionGetResponse = httpClient.get(endpoints.provision)
         assertEquals(HttpStatusCode.OK, provisionGetResponse.status)
 
         // 8. POST provision form with username/password
         val provisionPostResponse = httpClient.submitForm(
-            url = "/provision",
+            url = endpoints.provision,
             formParameters = parameters {
                 append("username", "testuser")
                 append("password", "letmein")
@@ -121,16 +124,16 @@ class OAuthFlowTest {
         assertEquals(HttpStatusCode.Found, provisionPostResponse.status)
         val authorizeRedirect = provisionPostResponse.headers[HttpHeaders.Location]
         assertNotNull(authorizeRedirect)
-        assertEquals("/authorize", authorizeRedirect)
+        assertEquals(endpoints.authorize, authorizeRedirect)
 
         // 9. Resume authorization - should redirect with code
-        val codeResponse = httpClient.get("/authorize")
+        val codeResponse = httpClient.get(endpoints.authorize)
         assertEquals(HttpStatusCode.Found, codeResponse.status, "Expected redirect after authorize resume")
         val callbackRedirect = codeResponse.headers[HttpHeaders.Location]
         assertNotNull(callbackRedirect, "Expected Location header after authorize resume")
 
         // If redirected back to provision, the auth_request cookie wasn't preserved
-        if (callbackRedirect == "/provision") {
+        if (callbackRedirect == endpoints.provision) {
             error("Redirected back to provision - auth_request cookie not preserved")
         }
 
@@ -139,7 +142,7 @@ class OAuthFlowTest {
 
         // 10. Exchange code for token
         val tokenResponse = httpClient.submitForm(
-            url = "/token",
+            url = endpoints.token,
             formParameters = parameters {
                 append("grant_type", "authorization_code")
                 append("code", code)
@@ -184,7 +187,7 @@ class OAuthFlowTest {
         }
 
         // 1. Register client with resource=test
-        val registerResponse = httpClient.post("/register?resource=test") {
+        val registerResponse = httpClient.post("${endpoints.register}?resource=test") {
             contentType(ContentType.Application.Json)
             setBody(ClientRegistrationRequest(
                 clientName = "test-client",
@@ -201,7 +204,7 @@ class OAuthFlowTest {
         val codeChallenge = generateCodeChallenge(codeVerifier)
 
         // 3. Start authorization with resource=test
-        val authResponse = httpClient.get("/authorize") {
+        val authResponse = httpClient.get(endpoints.authorize) {
             parameter("response_type", "code")
             parameter("client_id", clientId)
             parameter("redirect_uri", "http://localhost/callback")
@@ -221,7 +224,7 @@ class OAuthFlowTest {
         assertNotNull(authorizeRedirect)
 
         // 5. Resume authorization - should redirect with code
-        val codeResponse = httpClient.get("/authorize")
+        val codeResponse = httpClient.get(endpoints.authorize)
         assertEquals(HttpStatusCode.Found, codeResponse.status, "Expected redirect after authorize resume")
         val callbackRedirect = codeResponse.headers[HttpHeaders.Location]
         assertNotNull(callbackRedirect, "Expected Location header after authorize resume")
@@ -231,7 +234,7 @@ class OAuthFlowTest {
 
         // 6. Exchange code for token
         val tokenResponse = httpClient.submitForm(
-            url = "/token",
+            url = endpoints.token,
             formParameters = parameters {
                 append("grant_type", "authorization_code")
                 append("code", code)
@@ -275,7 +278,7 @@ class OAuthFlowTest {
         }
 
         // 1. Register client with resource=enc-claim-test
-        val registerResponse = httpClient.post("/register?resource=enc-claim-test") {
+        val registerResponse = httpClient.post("${endpoints.register}?resource=enc-claim-test") {
             contentType(ContentType.Application.Json)
             setBody(ClientRegistrationRequest(
                 clientName = "enc-test-client",
@@ -292,7 +295,7 @@ class OAuthFlowTest {
         val codeChallenge = generateCodeChallenge(codeVerifier)
 
         // 3. Start authorization with resource=enc-claim-test
-        val authResponse = httpClient.get("/authorize") {
+        val authResponse = httpClient.get(endpoints.authorize) {
             parameter("response_type", "code")
             parameter("client_id", clientId)
             parameter("redirect_uri", "http://localhost/callback")
@@ -310,7 +313,7 @@ class OAuthFlowTest {
         assertEquals(HttpStatusCode.Found, provisionGetResponse.status, "Expected redirect from provision handle{}")
 
         // 5. Resume authorization - should redirect with code
-        val codeResponse = httpClient.get("/authorize")
+        val codeResponse = httpClient.get(endpoints.authorize)
         assertEquals(HttpStatusCode.Found, codeResponse.status, "Expected redirect after authorize resume")
         val callbackRedirect = codeResponse.headers[HttpHeaders.Location]
         assertNotNull(callbackRedirect, "Expected Location header after authorize resume")
@@ -320,7 +323,7 @@ class OAuthFlowTest {
 
         // 6. Exchange code for token
         val tokenResponse = httpClient.submitForm(
-            url = "/token",
+            url = endpoints.token,
             formParameters = parameters {
                 append("grant_type", "authorization_code")
                 append("code", code)
@@ -357,7 +360,7 @@ class OAuthFlowTest {
         }
 
         // Register client and start OAuth flow
-        val registerResponse = httpClient.post("/register") {
+        val registerResponse = httpClient.post(endpoints.register) {
             contentType(ContentType.Application.Json)
             setBody(ClientRegistrationRequest(
                 clientName = "test-client",
@@ -368,7 +371,7 @@ class OAuthFlowTest {
         val codeVerifier = generateCodeVerifier()
         val codeChallenge = generateCodeChallenge(codeVerifier)
 
-        httpClient.get("/authorize") {
+        httpClient.get(endpoints.authorize) {
             parameter("response_type", "code")
             parameter("client_id", clientId)
             parameter("redirect_uri", "http://localhost/callback")
@@ -376,11 +379,11 @@ class OAuthFlowTest {
             parameter("code_challenge_method", "S256")
         }
 
-        httpClient.get("/provision")
+        httpClient.get(endpoints.provision)
 
         // Submit with wrong password
         val provisionResponse = httpClient.submitForm(
-            url = "/provision",
+            url = endpoints.provision,
             formParameters = parameters {
                 append("username", "testuser")
                 append("password", "wrongpassword")

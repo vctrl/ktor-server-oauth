@@ -15,7 +15,7 @@ import kotlin.time.toKotlinDuration
  * ```hocon
  * oauth {
  *     server {
- *         routePrefix = ""
+ *         routePrefix = "/.oauth"
  *         tokenExpiration = "PT2160H"  # 90 days
  *         authCodeStorage = "memory"
  *
@@ -71,7 +71,7 @@ data class OAuthConfig(
  */
 data class ServerConfig(
     /** Route prefix for all OAuth endpoints (e.g., "/.oauth") */
-    val routePrefix: String = "",
+    val routePrefix: String = "/.oauth",
     /** Default token expiration for issued tokens */
     val tokenExpiration: Duration = 90.days,
     /** Auth code storage: "memory" or fully qualified class name */
@@ -146,7 +146,7 @@ private fun Config.toOAuthConfig(): OAuthConfig = OAuthConfig(
 )
 
 private fun Config.toServerConfig(): ServerConfig = ServerConfig(
-    routePrefix = getStringOrDefault("routePrefix", ""),
+    routePrefix = getStringOrDefault("routePrefix", "/.oauth"),
     tokenExpiration = getDurationOrDefault("tokenExpiration", 90.days),
     authCodeStorage = getStringOrDefault("authCodeStorage", "memory"),
     jwt = if (hasPath("jwt")) getConfig("jwt").toJwtConfig() else JwtConfig(),

@@ -1,8 +1,29 @@
 package com.vcontrol.ktor.oauth
 
+import com.vcontrol.ktor.oauth.config.OAuthConfig
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.*
+
+/**
+ * Helper class providing OAuth endpoint paths for tests.
+ * Loads configuration from application.conf to ensure tests use correct paths.
+ */
+class OAuthEndpoints(config: OAuthConfig = OAuthConfig.load()) {
+    private val server = config.server
+
+    val register: String get() = server.endpoint(server.endpoints.register)
+    val authorize: String get() = server.endpoint(server.endpoints.authorize)
+    val token: String get() = server.endpoint(server.endpoints.token)
+    val provision: String get() = server.endpoint(server.endpoints.provision)
+
+    /** Get provision endpoint for a named provider */
+    fun provision(providerName: String): String = "${provision}/$providerName"
+
+    /** Well-known endpoints (not prefixed) */
+    val authServerMetadata: String = "/.well-known/oauth-authorization-server"
+    val protectedResourceMetadata: String = "/.well-known/oauth-protected-resource"
+}
 
 /**
  * PKCE Test Utilities

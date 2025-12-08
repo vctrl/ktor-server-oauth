@@ -1,6 +1,7 @@
 package com.vcontrol.ktor.oauth.session
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 
 /**
  * Interface for session records with expiration metadata.
@@ -78,4 +79,25 @@ interface SessionRecordStorage {
      * @return Flow of session metadata for cleanup processing
      */
     fun scan(): Flow<SessionRecordMeta>
+
+    /**
+     * Remove expired sessions from storage.
+     *
+     * Default implementation uses [scan] + [delete] to iterate and remove.
+     * Override for optimized cleanup (e.g., SQL batch delete) or no-op
+     * if storage handles expiration natively (e.g., Redis TTL).
+     *
+     * @return Count of deleted sessions
+     */
+    suspend fun cleanup(): Int {
+        var deleted = 0
+        val now = System.currentTimeMillis()
+        scan().collect { meta ->
+            if (now >= meta.expiresAt) {
+                delete(meta.id)
+                deleted++
+            }
+        }
+        return deleted
+    }
 }

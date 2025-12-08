@@ -1,5 +1,6 @@
 package com.vcontrol.ktor.oauth.route
 
+import com.vcontrol.ktor.oauth.baseUrl
 import com.vcontrol.ktor.oauth.oauth
 import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
 import com.vcontrol.ktor.oauth.model.AuthorizationRequest
@@ -66,15 +67,18 @@ fun Routing.configureAuthorizationRoutes() {
                 call.sessions.clear<ProvisionSession>()
             } else {
                 // New authorization request - get resource from resource param (RFC 8707)
-                val providerName = params["resource"]
+                val resourceParam = params["resource"]
 
-                // Validate resource exists if specified
-                if (providerName != null && !registry.authProviders.containsKey(providerName)) {
-                    call.respond(HttpStatusCode.BadRequest, OAuthError(
-                        error = OAuthError.INVALID_REQUEST,
-                        errorDescription = "Unknown resource: $providerName"
-                    ))
-                    return@get
+                // Resolve provider: if resource is a URL, strip base URL to get path
+                val providerName = when {
+                    resourceParam == null -> null
+                    resourceParam.contains("://") -> {
+                        // Resource is a URL - strip base URL to get path and find provider
+                        val path = resourceParam.removePrefix(call.baseUrl)
+                        application.findAuthProviderForPath(path)
+                    }
+                    registry.authProviders.containsKey(resourceParam) -> resourceParam
+                    else -> null  // Unknown resource name, fall back to default
                 }
 
                 request = AuthorizationRequest(

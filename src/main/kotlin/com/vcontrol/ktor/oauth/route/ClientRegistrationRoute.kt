@@ -1,5 +1,6 @@
 package com.vcontrol.ktor.oauth.route
 
+import com.vcontrol.ktor.oauth.baseUrl
 import com.vcontrol.ktor.oauth.oauth
 import com.vcontrol.ktor.oauth.model.*
 import com.vcontrol.ktor.oauth.token.TokenUtils
@@ -41,16 +42,17 @@ fun Routing.configureClientRegistrationRoutes() {
             val request = call.receive<ClientRegistrationRequest>()
 
             // Get provider from ?resource= query param (RFC 8707)
-            val providerName = call.request.queryParameters["resource"]
+            val resourceParam = call.request.queryParameters["resource"]
 
-            // Validate provider exists if specified
-            if (providerName != null && !application.oauth.authProviders.containsKey(providerName)) {
-                val error = OAuthError(
-                    error = OAuthError.INVALID_REQUEST,
-                    errorDescription = "Unknown resource: $providerName"
-                )
-                call.respond(HttpStatusCode.BadRequest, error)
-                return@post
+            // Resolve provider: if resource is a URL, strip base URL to get path
+            val providerName = when {
+                resourceParam == null -> null
+                resourceParam.contains("://") -> {
+                    val path = resourceParam.removePrefix(call.baseUrl)
+                    application.findAuthProviderForPath(path)
+                }
+                application.oauth.authProviders.containsKey(resourceParam) -> resourceParam
+                else -> null  // Unknown resource name, fall back to default
             }
 
             // Generate client credentials (ephemeral - not persisted)
@@ -79,6 +81,7 @@ fun Routing.configureClientRegistrationRoutes() {
             call.respond(HttpStatusCode.Created, response)
 
         } catch (e: Exception) {
+            logger.error(e) { "Client registration failed: ${e.message}" }
             val error = OAuthError(
                 error = OAuthError.INVALID_REQUEST,
                 errorDescription = "Invalid registration request: ${e.message}"

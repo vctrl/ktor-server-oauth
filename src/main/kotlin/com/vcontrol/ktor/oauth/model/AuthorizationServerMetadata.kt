@@ -7,27 +7,38 @@ import kotlinx.serialization.Serializable
  * OAuth 2.0 Response Types (RFC 6749)
  */
 @Serializable
-enum class ResponseType { Code, Token }
+enum class ResponseType {
+    @SerialName("code") Code,
+    @SerialName("token") Token
+}
 
 /**
  * OAuth 2.0 Grant Types (RFC 6749)
  */
 @Serializable
-enum class GrantType { AuthorizationCode, ClientCredentials, RefreshToken }
+enum class GrantType {
+    @SerialName("authorization_code") AuthorizationCode,
+    @SerialName("client_credentials") ClientCredentials,
+    @SerialName("refresh_token") RefreshToken
+}
 
 /**
  * OAuth 2.0 Token Endpoint Authentication Methods (RFC 7591)
  */
 @Serializable
-enum class TokenEndpointAuthMethod { ClientSecretPost, ClientSecretBasic, None }
+enum class TokenEndpointAuthMethod {
+    @SerialName("client_secret_post") ClientSecretPost,
+    @SerialName("client_secret_basic") ClientSecretBasic,
+    @SerialName("none") None
+}
 
 /**
  * PKCE Code Challenge Methods (RFC 7636)
  */
 @Serializable
 enum class CodeChallengeMethod {
-    @SerialName("S256") S256,  // Must preserve uppercase per RFC 7636
-    Plain
+    @SerialName("S256") S256,
+    @SerialName("plain") Plain
 }
 
 /**

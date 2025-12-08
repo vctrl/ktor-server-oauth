@@ -140,18 +140,7 @@ private suspend fun RoutingContext.handleClientCredentialsGrant(
     }
 
     // Get provider from ?resource= query param (RFC 8707)
-    val providerName = call.request.queryParameters["resource"]
     val registry = call.application.oauth
-
-    // Validate provider exists if specified
-    if (providerName != null && !registry.authProviders.containsKey(providerName)) {
-        val error = OAuthError(
-            error = OAuthError.INVALID_REQUEST,
-            errorDescription = "Unknown resource: $providerName"
-        )
-        call.respond(HttpStatusCode.BadRequest, error)
-        return
-    }
 
     // Get validator from local auth server configuration
     val localAuthServer = registry.localAuthServer

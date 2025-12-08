@@ -1,6 +1,10 @@
 package com.vcontrol.ktor.oauth
 
 import com.vcontrol.ktor.oauth.config.configureOAuthSessions
+import com.vcontrol.ktor.oauth.session.DefaultSessionJson
+import com.vcontrol.ktor.oauth.session.SessionRecordStorage
+import com.vcontrol.ktor.oauth.session.storage.FileStorageConfig
+import com.vcontrol.ktor.oauth.session.storage.InMemoryStorageConfig
 import com.vcontrol.ktor.oauth.token.SessionKeyClaimsProvider
 import io.ktor.server.application.*
 import io.ktor.server.sessions.*
@@ -121,7 +125,7 @@ interface SessionStorageBuilder<C : SessionsConfigBase> {
     fun createConfig(): C
 
     /** Build the storage from config */
-    fun build(config: C, application: Application): SessionStorage
+    fun build(config: C, application: Application): SessionRecordStorage
 }
 
 /**
@@ -180,12 +184,12 @@ class InMemorySessionsConfig : SessionsConfigBase()
 
 /**
  * Disk session storage builder.
- * Uses Ktor's directorySessionStorage to persist sessions as files.
+ * Uses [FileSessionRecordStorage] to persist sessions as JSON files.
  *
  * Each session is stored as a separate file, enabling:
  * - File-based cleanup using modification timestamps
  * - Simple backup/restore via file operations
- * - Integration with Ktor's CacheStorage for caching
+ * - TTL-based expiration with metadata
  */
 object DiskSessions : SessionStorageBuilder<DiskSessionsConfig> {
     override fun createConfig() = DiskSessionsConfig()
@@ -193,17 +197,20 @@ object DiskSessions : SessionStorageBuilder<DiskSessionsConfig> {
     override fun build(
         config: DiskSessionsConfig,
         application: Application
-    ): SessionStorage {
+    ): SessionRecordStorage {
         val dataDir = config.customDataDir
             ?: application.oauth.config.sessions.dataDir
 
-        return directorySessionStorage(File(dataDir), cached = true)
+        return FileStorageConfig(
+            dataDir = dataDir,
+            json = config.customJson ?: DefaultSessionJson
+        ).createStorage()
     }
 }
 
 /**
  * In-memory session storage builder.
- * Uses Ktor's SessionStorageMemory for ephemeral sessions.
+ * Uses [InMemorySessionRecordStorage] for ephemeral sessions.
  *
  * Sessions are lost when the application restarts.
  * Useful for testing or non-persistent session types.
@@ -211,8 +218,8 @@ object DiskSessions : SessionStorageBuilder<DiskSessionsConfig> {
 object InMemorySessions : SessionStorageBuilder<InMemorySessionsConfig> {
     override fun createConfig() = InMemorySessionsConfig()
 
-    override fun build(config: InMemorySessionsConfig, application: Application): SessionStorage {
-        return SessionStorageMemory()
+    override fun build(config: InMemorySessionsConfig, application: Application): SessionRecordStorage {
+        return InMemoryStorageConfig.createStorage()
     }
 }
 
@@ -242,7 +249,7 @@ class EncryptedDiskSessionsConfig : SessionsConfigBase() {
  * client presenting their bearer token.
  *
  * Encryption is handled by the session tracker, not storage.
- * This uses the same directorySessionStorage as DiskSessions - the
+ * This uses the same [FileSessionRecordStorage] as DiskSessions - the
  * difference is that EncryptedDiskSessions auto-adds SessionKeyClaimsProvider.
  *
  * Usage:
@@ -264,12 +271,12 @@ class EncryptedDiskSessionsConfig : SessionsConfigBase() {
 object EncryptedDiskSessions : SessionStorageBuilder<EncryptedDiskSessionsConfig> {
     override fun createConfig() = EncryptedDiskSessionsConfig()
 
-    override fun build(config: EncryptedDiskSessionsConfig, application: Application): SessionStorage {
+    override fun build(config: EncryptedDiskSessionsConfig, application: Application): SessionRecordStorage {
         val dataDir = config.customDataDir
             ?: application.oauth.config.sessions.dataDir
 
-        // Use Ktor's directory storage - encryption is handled by BearerSessionTracker
-        return directorySessionStorage(File(dataDir), cached = true)
+        // Encryption is handled by BearerSessionTracker
+        return FileStorageConfig(dataDir = dataDir).createStorage()
     }
 }
 

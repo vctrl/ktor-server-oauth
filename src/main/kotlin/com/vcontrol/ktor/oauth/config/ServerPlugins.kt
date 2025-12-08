@@ -2,6 +2,7 @@ package com.vcontrol.ktor.oauth.config
 
 import com.vcontrol.ktor.oauth.*
 import com.vcontrol.ktor.oauth.model.AuthorizationRequest
+import com.vcontrol.ktor.oauth.session.SessionRecordStorage
 import com.vcontrol.ktor.oauth.session.bearerSession
 import com.vcontrol.ktor.oauth.session.configureProvisionSession
 import com.vcontrol.ktor.oauth.baseUrl
@@ -102,7 +103,7 @@ fun Application.configureOAuthSessions() {
     // Build storage instance for each block and collect session type mappings
     data class SessionTypeMapping(
         val type: KClass<*>,
-        val storage: SessionStorage,
+        val storage: SessionRecordStorage,
         val ttl: kotlin.time.Duration
     )
     val sessionTypeMappings = mutableListOf<SessionTypeMapping>()

@@ -5,6 +5,7 @@ import com.vcontrol.ktor.oauth.session.DefaultSessionJson
 import com.vcontrol.ktor.oauth.session.SessionRecordStorage
 import com.vcontrol.ktor.oauth.session.storage.FileStorageConfig
 import com.vcontrol.ktor.oauth.session.storage.InMemoryStorageConfig
+import com.vcontrol.ktor.oauth.session.storage.StorageConfig
 import com.vcontrol.ktor.oauth.token.SessionKeyClaimsProvider
 import io.ktor.server.application.*
 import io.ktor.server.sessions.*
@@ -331,8 +332,9 @@ internal data class SessionsBlockConfig(
 @OAuthDsl
 class OAuthSessionsPluginConfig {
     internal val sessionsBlocks = mutableListOf<SessionsBlockConfig>()
-    internal var currentBuilder: SessionStorageBuilder<*> = DiskSessions
-    @PublishedApi internal var currentConfig: SessionsConfigBase = DiskSessions.createConfig()
+    @PublishedApi internal var currentBuilder: SessionStorageBuilder<*>? = null
+    @PublishedApi internal var currentConfig: SessionsConfigBase? = null
+    private var storageExplicitlyConfigured = false
 
     /**
      * JWT claim name to use as the session key.
@@ -406,6 +408,7 @@ class OAuthSessionsPluginConfig {
         val config = builder.createConfig().apply(configure)
         currentBuilder = builder
         currentConfig = config
+        storageExplicitlyConfigured = true
     }
 
     /**
@@ -421,14 +424,48 @@ class OAuthSessionsPluginConfig {
      * ```
      */
     inline fun <reified T : Any> session() {
+        // Ensure we have a config to add session types to
+        // (will be replaced with proper config from application.conf in build() if not explicitly set)
+        if (currentConfig == null) {
+            currentConfig = DiskSessionsConfig()
+            currentBuilder = DiskSessions
+        }
         @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
-        currentConfig.sessionTypes[T::class] = SessionTypeConfig()
+        currentConfig!!.sessionTypes[T::class] = SessionTypeConfig()
     }
 
-    internal fun build(): List<SessionsBlockConfig> {
+    internal fun build(applicationConfig: io.ktor.server.config.ApplicationConfig): List<SessionsBlockConfig> {
+        // Apply defaults from application.conf if storage wasn't explicitly configured
+        if (!storageExplicitlyConfigured && currentConfig != null) {
+            val storageConfig = StorageConfig.fromApplicationConfig(applicationConfig)
+            val existingSessionTypes = currentConfig!!.sessionTypes.toMap()
+
+            when (storageConfig) {
+                is FileStorageConfig -> {
+                    currentBuilder = DiskSessions
+                    currentConfig = DiskSessionsConfig().apply {
+                        customDataDir = storageConfig.dataDir
+                        // Preserve registered session types
+                        @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
+                        sessionTypes.putAll(existingSessionTypes)
+                    }
+                }
+                is InMemoryStorageConfig -> {
+                    currentBuilder = InMemorySessions
+                    currentConfig = InMemorySessionsConfig().apply {
+                        // Preserve registered session types
+                        @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
+                        sessionTypes.putAll(existingSessionTypes)
+                    }
+                }
+            }
+        }
+
         // If there are session types registered, create a block
-        if (currentConfig.sessionTypes.isNotEmpty()) {
-            sessionsBlocks.add(SessionsBlockConfig(currentBuilder, currentConfig))
+        val config = currentConfig
+        val builder = currentBuilder
+        if (config != null && builder != null && config.sessionTypes.isNotEmpty()) {
+            sessionsBlocks.add(SessionsBlockConfig(builder, config))
         }
         return sessionsBlocks.toList()
     }
@@ -469,8 +506,8 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
     // Store the session key resolver for BearerSessionTransport to use
     application.attributes.put(SessionKeyResolverKey, config::resolveSessionKey)
 
-    // Build sessions blocks from config
-    val sessionsBlocks = config.build()
+    // Build sessions blocks from config (reads defaults from application.conf)
+    val sessionsBlocks = config.build(application.environment.config)
 
     // Auto-add SessionKeyClaimsProvider if encrypted sessions are used
     val usesEncryptedSessions = sessionsBlocks.any { it.builder == EncryptedDiskSessions }

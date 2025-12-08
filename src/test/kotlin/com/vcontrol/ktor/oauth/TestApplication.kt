@@ -58,7 +58,7 @@ fun Application.testModule() {
                         call.respondProvisionForm("Invalid password")
                     }
                     else -> {
-                        sessions.set(TestSession(username, password))
+                        call.sessions.set(TestSession(username, password))
                         complete {
                             withClaim("username", username)
                         }

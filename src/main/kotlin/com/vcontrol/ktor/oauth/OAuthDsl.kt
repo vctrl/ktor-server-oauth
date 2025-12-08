@@ -48,7 +48,7 @@ typealias AuthProviderValidator = suspend io.ktor.server.auth.jwt.JWTCredential.
  *     get { call.respondText(formHtml, ContentType.Text.Html) }
  *     post {
  *         val params = call.receiveParameters()
- *         sessions.set(MySession(apiKey = params["api_key"]))
+ *         call.sessions.set(MySession(apiKey = params["api_key"]))
  *         complete(claims = mapOf("username" to params["username"]))
  *     }
  * }
@@ -93,7 +93,7 @@ class ProviderConfig internal constructor(val name: String?) {
      *     get { call.respondText(formHtml, ContentType.Text.Html) }
      *     post {
      *         val params = call.receiveParameters()
-     *         sessions.set(MySession(apiKey = params["api_key"]))
+     *         call.sessions.set(MySession(apiKey = params["api_key"]))
      *         complete(claims = mapOf("username" to params["username"]))
      *     }
      * }
@@ -151,7 +151,7 @@ class ProviderConfig internal constructor(val name: String?) {
  *     post {
  *         val params = call.receiveParameters()
  *         if (params["password"] == "letmein") {
- *             sessions.set(MySession(apiKey = params["api_key"]))
+ *             call.sessions.set(MySession(apiKey = params["api_key"]))
  *             complete(claims = mapOf("username" to params["username"]))
  *         } else {
  *             call.respondText("Invalid password", ContentType.Text.Html)
@@ -204,7 +204,7 @@ class ProvisionConfig(
  *         get { call.respondText(formHtml, ContentType.Text.Html) }
  *         post {
  *             val params = call.receiveParameters()
- *             sessions.set(MySession(apiKey = params["api_key"]))
+ *             call.sessions.set(MySession(apiKey = params["api_key"]))
  *             complete(claims = mapOf("username" to params["username"]))
  *         }
  *     }

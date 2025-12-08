@@ -34,7 +34,7 @@ internal val ProvisionCompletedKey = AttributeKey<Boolean>("ProvisionCompleted")
  *     post {
  *         val params = call.receiveParameters()
  *         if (params["password"] == "letmein") {
- *             sessions.set(MySession(apiKey = params["api_key"]))
+ *             call.sessions.set(MySession(apiKey = params["api_key"]))
  *             complete(claims = mapOf("username" to params["username"]))
  *         } else {
  *             call.respondText("Invalid password")
@@ -49,9 +49,6 @@ class ProvisionRoutingContext(
 ) {
     /** The application call */
     val call: ApplicationCall get() = underlying.call
-
-    /** Access to sessions */
-    val sessions: CurrentSession get() = call.sessions
 
     /**
      * The client ID for this provision session.

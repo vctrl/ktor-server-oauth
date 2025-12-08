@@ -27,7 +27,6 @@ private const val STANDALONE_MARKER = "standalone://complete"
  * Handlers receive [ProvisionRoutingContext] which provides:
  * - [ProvisionRoutingContext.call] - The application call
  * - [ProvisionRoutingContext.clientId] - The client ID for this session
- * - [ProvisionRoutingContext.sessions] - Session accessor for get/set
  * - [ProvisionRoutingContext.complete] - Complete provision with claims
  *
  * Example:
@@ -36,7 +35,7 @@ private const val STANDALONE_MARKER = "standalone://complete"
  *     provision {
  *         get { call.respondText(formHtml, ContentType.Text.Html) }
  *         post {
- *             sessions.set(MySession(apiKey = params["api_key"]))
+ *             call.sessions.set(MySession(apiKey = params["api_key"]))
  *             complete(claims = mapOf("username" to params["username"]))
  *         }
  *     }

@@ -99,7 +99,7 @@ fun Application.module() {
             get { call.respondText(formHtml, ContentType.Text.Html) }
             post {
                 val params = call.receiveParameters()
-                sessions.set(MySession(apiKey = params["api_key"]))
+                call.sessions.set(MySession(apiKey = params["api_key"]))
                 complete(claims = mapOf("username" to params["username"]))
             }
         }
@@ -282,7 +282,7 @@ routing {
 
             if (validateApiKey(apiKey)) {
                 // Store in bearer-bound session
-                sessions.set(MySession(apiKey = apiKey))
+                call.sessions.set(MySession(apiKey = apiKey))
 
                 // Complete with claims embedded in JWT
                 complete(claims = mapOf("validated" to "true"))
@@ -304,9 +304,8 @@ Handlers receive `ProvisionRoutingContext` with:
 
 | Property | Description |
 |----------|-------------|
-| `call` | The Ktor `ApplicationCall` |
+| `call` | The Ktor `ApplicationCall` (use `call.sessions` for session access) |
 | `clientId` | The OAuth client ID |
-| `sessions` | Session accessor for `sessions.get<T>()` / `sessions.set(T)` |
 | `complete()` | Complete provision and continue OAuth flow |
 
 ## Multiple Providers
@@ -339,28 +338,6 @@ routing {
 ```
 
 The plugin automatically discovers which routes are protected by which provider by introspecting Ktor's route tree for `AuthenticationRouteSelector`. This powers RFC 9728 protected resource metadata without manual registration.
-
-## External Authorization Servers
-
-Validate tokens from external OAuth providers:
-
-```kotlin
-install(OAuth) {
-    authorizationServer("partner", ExternalAuthServer) {
-        jwksUri = "https://partner.example/.well-known/jwks.json"
-        issuer = "https://partner.example"
-
-        // Optional client validation
-        client { clientId -> clientId in allowedPartners }
-    }
-}
-
-install(Authentication) {
-    oauthJwt("partner") {
-        authorizationServer = "partner"
-    }
-}
-```
 
 ## OAuth Flow
 

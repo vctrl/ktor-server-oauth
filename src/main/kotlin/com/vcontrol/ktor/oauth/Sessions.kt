@@ -7,12 +7,18 @@ import com.vcontrol.ktor.oauth.session.storage.FileStorageConfig
 import com.vcontrol.ktor.oauth.session.storage.InMemoryStorageConfig
 import com.vcontrol.ktor.oauth.session.storage.StorageConfig
 import com.vcontrol.ktor.oauth.token.SessionKeyClaimsProvider
+import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.server.application.*
+import io.ktor.server.config.*
 import io.ktor.server.sessions.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import java.io.File
 import kotlin.reflect.KClass
 import kotlin.time.Duration
+
+private val logger = KotlinLogging.logger {}
 
 /**
  * Per-session type configuration.
@@ -306,16 +312,56 @@ internal data class SessionsBlockConfig(
 }
 
 /**
- * Configuration for OAuth.Sessions sub-plugin.
+ * Configuration for session cleanup background job.
+ *
+ * @param interval How often to run cleanup, or null to disable
+ */
+@OAuthDsl
+class CleanupConfig(
+    var interval: Duration? = null
+) {
+    companion object {
+        /**
+         * Load cleanup config from HOCON ApplicationConfig.
+         *
+         * Reads `oauth.sessions.cleanup.interval`:
+         * - Not set or "disabled": cleanup disabled (null interval)
+         * - ISO-8601 duration (e.g., "PT1H"): cleanup every hour
+         *
+         * Example application.conf:
+         * ```hocon
+         * oauth {
+         *     sessions {
+         *         cleanup {
+         *             interval = "PT1H"  # Every hour
+         *         }
+         *     }
+         * }
+         * ```
+         */
+        fun fromApplicationConfig(config: ApplicationConfig): CleanupConfig {
+            val intervalStr = config.propertyOrNull("oauth.sessions.cleanup.interval")?.getString()
+            val interval = when {
+                intervalStr == null -> null  // disabled by default
+                intervalStr == "disabled" -> null
+                else -> Duration.parse(intervalStr)  // ISO-8601: "PT1H"
+            }
+            return CleanupConfig(interval)
+        }
+    }
+}
+
+/**
+ * Configuration for OAuthSessions plugin.
  *
  * Example:
  * ```kotlin
- * install(OAuth.Sessions) {
+ * install(OAuthSessions) {
  *     session<MySession>()
  * }
  *
  * // Or with custom storage:
- * install(OAuth.Sessions) {
+ * install(OAuthSessions) {
  *     storage(DiskSessions) {
  *         dataDir = "/tmp/sessions"
  *     }
@@ -323,8 +369,16 @@ internal data class SessionsBlockConfig(
  * }
  *
  * // Or with custom session key claim:
- * install(OAuth.Sessions) {
+ * install(OAuthSessions) {
  *     sessionKeyClaim = "tenant_id"  // Use tenant_id instead of client_id
+ *     session<MySession>()
+ * }
+ *
+ * // Or with cleanup enabled:
+ * install(OAuthSessions) {
+ *     cleanup {
+ *         interval = 1.hours
+ *     }
  *     session<MySession>()
  * }
  * ```
@@ -335,6 +389,8 @@ class OAuthSessionsPluginConfig {
     @PublishedApi internal var currentBuilder: SessionStorageBuilder<*>? = null
     @PublishedApi internal var currentConfig: SessionsConfigBase? = null
     private var storageExplicitlyConfigured = false
+    internal var cleanupConfig: CleanupConfig? = null
+    private var cleanupExplicitlyConfigured = false
 
     /**
      * JWT claim name to use as the session key.
@@ -393,7 +449,7 @@ class OAuthSessionsPluginConfig {
      *
      * Example:
      * ```kotlin
-     * install(OAuth.Sessions) {
+     * install(OAuthSessions) {
      *     storage(EncryptedDiskSessions) {
      *         dataDir = "/secure/sessions"
      *     }
@@ -409,6 +465,29 @@ class OAuthSessionsPluginConfig {
         currentBuilder = builder
         currentConfig = config
         storageExplicitlyConfigured = true
+    }
+
+    /**
+     * Configure session cleanup background job.
+     *
+     * Example:
+     * ```kotlin
+     * install(OAuthSessions) {
+     *     cleanup {
+     *         interval = 1.hours
+     *     }
+     *     session<MySession>()
+     * }
+     * ```
+     *
+     * Or via application.conf:
+     * ```hocon
+     * oauth.sessions.cleanup.interval = "PT1H"
+     * ```
+     */
+    fun cleanup(configure: CleanupConfig.() -> Unit) {
+        cleanupConfig = CleanupConfig().apply(configure)
+        cleanupExplicitlyConfigured = true
     }
 
     /**
@@ -469,10 +548,22 @@ class OAuthSessionsPluginConfig {
         }
         return sessionsBlocks.toList()
     }
+
+    /**
+     * Build resolved cleanup config.
+     * Uses explicit config if set, otherwise loads from application.conf.
+     */
+    internal fun buildCleanupConfig(applicationConfig: ApplicationConfig): CleanupConfig {
+        return if (cleanupExplicitlyConfigured && cleanupConfig != null) {
+            cleanupConfig!!
+        } else {
+            CleanupConfig.fromApplicationConfig(applicationConfig)
+        }
+    }
 }
 
 /**
- * OAuth.Sessions sub-plugin for configuring token-bound sessions.
+ * OAuthSessions plugin for configuring token-bound sessions.
  *
  * This plugin extends Ktor's Sessions with OAuth-specific features:
  * - JWT ID (jti) based session transport (sessions bound to individual tokens by default)
@@ -487,7 +578,7 @@ class OAuthSessionsPluginConfig {
  *     authorizationServer(LocalAuthServer) { openRegistration = true }
  * }
  *
- * install(OAuth.Sessions) {
+ * install(OAuthSessions) {
  *     session<MySession>()
  * }
  *
@@ -501,7 +592,7 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
 
     // Verify OAuth is installed
     val registry = application.oauthOrNull
-        ?: error("OAuth.Sessions requires OAuth plugin to be installed first. Use install(OAuth) before install(OAuth.Sessions).")
+        ?: error("OAuthSessions requires OAuth plugin to be installed first. Use install(OAuth) before install(OAuthSessions).")
 
     // Store the session key resolver for BearerSessionTransport to use
     application.attributes.put(SessionKeyResolverKey, config::resolveSessionKey)
@@ -526,4 +617,38 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
 
     // Install sessions
     application.configureOAuthSessions()
+
+    // Build cleanup config and start background job if configured
+    val cleanupConfig = config.buildCleanupConfig(application.environment.config)
+    val cleanupInterval = cleanupConfig.interval
+    if (cleanupInterval != null && sessionsBlocks.isNotEmpty()) {
+        // Build storage instances for cleanup
+        val storages = sessionsBlocks.map { block ->
+            @Suppress("UNCHECKED_CAST")
+            (block.builder as SessionStorageBuilder<SessionsConfigBase>).build(
+                config = block.config,
+                application = application
+            )
+        }.distinct()
+
+        // Launch cleanup coroutine
+        application.launch {
+            logger.info { "Session cleanup job started with interval $cleanupInterval" }
+            while (isActive) {
+                delay(cleanupInterval)
+                var totalDeleted = 0
+                for (storage in storages) {
+                    try {
+                        val deleted = storage.cleanup()
+                        totalDeleted += deleted
+                    } catch (e: Exception) {
+                        logger.error(e) { "Session cleanup failed for storage $storage" }
+                    }
+                }
+                if (totalDeleted > 0) {
+                    logger.info { "Session cleanup completed: $totalDeleted expired sessions removed" }
+                }
+            }
+        }
+    }
 }

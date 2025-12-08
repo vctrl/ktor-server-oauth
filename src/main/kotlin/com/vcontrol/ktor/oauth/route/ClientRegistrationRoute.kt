@@ -44,12 +44,12 @@ fun Routing.configureClientRegistrationRoutes() {
             // Get provider from ?resource= query param (RFC 8707)
             val resourceParam = call.request.queryParameters["resource"]
 
-            // Resolve provider: if resource is a URL, strip base URL to get path
+            // Resolve provider: if resource is a URL, check if path segment matches a provider
             val providerName = when {
                 resourceParam == null -> null
                 resourceParam.contains("://") -> {
                     val path = resourceParam.removePrefix(call.baseUrl)
-                    application.findAuthProviderForPath(path)
+                    path.trim('/').split('/').firstOrNull { application.oauth.authProviders.containsKey(it) }
                 }
                 application.oauth.authProviders.containsKey(resourceParam) -> resourceParam
                 else -> null  // Unknown resource name, fall back to default

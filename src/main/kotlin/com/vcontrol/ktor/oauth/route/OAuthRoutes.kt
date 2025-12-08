@@ -92,8 +92,9 @@ fun Application.configureOAuthRoutes() {
 /**
  * Find the auth provider name for a given path by introspecting the route tree.
  * Traverses all routes and looks for AuthenticationRouteSelector in the parent chain.
+ * Used by protected resource metadata endpoint.
  */
-internal fun Application.findAuthProviderForPath(path: String): String? {
+private fun Application.findAuthProviderForPath(path: String): String? {
     // Get the root routing node
     val rootRoute = this.routing {}
 

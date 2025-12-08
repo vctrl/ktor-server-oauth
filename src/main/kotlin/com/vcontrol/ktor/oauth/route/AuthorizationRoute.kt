@@ -69,17 +69,18 @@ fun Routing.configureAuthorizationRoutes() {
                 // New authorization request - get resource from resource param (RFC 8707)
                 val resourceParam = params["resource"]
 
-                // Resolve provider: if resource is a URL, strip base URL to get path
+                // Resolve provider: if resource is a URL, check if path segment matches a provider
                 val providerName = when {
                     resourceParam == null -> null
                     resourceParam.contains("://") -> {
-                        // Resource is a URL - strip base URL to get path and find provider
+                        // Resource is a URL - extract path and check segments for provider match
                         val path = resourceParam.removePrefix(call.baseUrl)
-                        application.findAuthProviderForPath(path)
+                        path.trim('/').split('/').firstOrNull { registry.authProviders.containsKey(it) }
                     }
                     registry.authProviders.containsKey(resourceParam) -> resourceParam
                     else -> null  // Unknown resource name, fall back to default
                 }
+                logger.debug { "Resolved provider: resource=$resourceParam -> provider=$providerName (registered: ${registry.authProviders.keys})" }
 
                 request = AuthorizationRequest(
                     responseType = parseResponseType(params["response_type"]),

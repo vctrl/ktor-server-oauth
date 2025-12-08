@@ -163,7 +163,7 @@ install(OAuth) {
 
 ```kotlin
 install(OAuthSessions) {
-    // Use a custom claim as session key (default: client_id)
+    // Use a custom claim as session key (default: jti)
     sessionKeyClaim = "username"
 
     // Or use a resolver for complex logic
@@ -184,24 +184,47 @@ install(OAuthSessions) {
 
 ```kotlin
 install(OAuthSessions) {
-    sessions(DiskSessions) {
+    storage(DiskSessions) {
         dataDir = "/var/lib/myapp/sessions"
         ttl = 30.days
-        session<MySession>()
     }
+    session<MySession>()
 }
 ```
 
 ### Encrypted Sessions
 
+Session encryption is enabled by default. Sessions are encrypted with AES-256-GCM using
+a per-client key embedded in the JWT token. To disable encryption:
+
 ```kotlin
 install(OAuthSessions) {
-    sessions(EncryptedDiskSessions) {
-        dataDir = "/var/lib/myapp/sessions"
-        session<MySession>()
-    }
+    encrypted = false
+    session<MySession>()
 }
 ```
+
+### Session Cleanup
+
+Expired sessions can be automatically cleaned up with a background job:
+
+```kotlin
+install(OAuthSessions) {
+    cleanup {
+        interval = 1.hours
+    }
+    session<MySession>()
+}
+```
+
+Or via application.conf:
+
+```hocon
+oauth.sessions.cleanup.interval = "PT1H"
+```
+
+Cleanup is disabled by default. The job runs on the configured interval and properly
+shuts down when the application stops.
 
 ### application.conf
 
@@ -226,15 +249,11 @@ oauth {
     }
 
     sessions {
-        storage = "directory"
+        type = "file"  # or "memory"
         dataDir = ${user.home}"/.ktor-oauth/sessions"
-        ttl = "PT2160H"
-        inactivityTimeout = "PT0S"
 
         cleanup {
-            enabled = false
-            interval = "PT1H"
-            initialDelay = "PT5M"
+            interval = "PT1H"  # ISO-8601 duration, or omit to disable
         }
     }
 }

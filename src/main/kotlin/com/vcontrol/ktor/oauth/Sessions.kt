@@ -8,6 +8,7 @@ import com.vcontrol.ktor.oauth.session.storage.InMemoryStorageConfig
 import com.vcontrol.ktor.oauth.session.storage.StorageConfig
 import com.vcontrol.ktor.oauth.token.SessionKeyClaimsProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.ktor.events.*
 import io.ktor.server.application.*
 import io.ktor.server.config.*
 import io.ktor.server.sessions.*
@@ -231,63 +232,6 @@ object InMemorySessions : SessionStorageBuilder<InMemorySessionsConfig> {
 }
 
 /**
- * Config for EncryptedDiskSessions.
- * Same options as DiskSessionsConfig.
- */
-@OAuthDsl
-class EncryptedDiskSessionsConfig : SessionsConfigBase() {
-    internal var customDataDir: String? = null
-
-    /**
-     * Override the session storage directory path.
-     * Default: from oauth.sessions.dataDir in application.conf
-     */
-    var dataDir: String?
-        get() = customDataDir
-        set(value) { customDataDir = value }
-}
-
-/**
- * Encrypted disk session storage builder.
- *
- * Encrypts session data using per-client keys from JWT tokens.
- * Session data is encrypted with AES-256-GCM using a key embedded in each
- * client's JWT token. The server cannot decrypt session data without the
- * client presenting their bearer token.
- *
- * Encryption is handled by the session tracker, not storage.
- * This uses the same [FileSessionRecordStorage] as DiskSessions - the
- * difference is that EncryptedDiskSessions auto-adds SessionKeyClaimsProvider.
- *
- * Usage:
- * ```kotlin
- * install(OAuth) {
- *     sessions(EncryptedDiskSessions) {
- *         session<MySession>()
- *     }
- *
- *     authorizationServer(LocalAuthServer) {
- *         // SessionKeyClaimsProvider is auto-added when using EncryptedDiskSessions
- *     }
- * }
- * ```
- *
- * Sessions written during provision flow (before JWT exists) are stored
- * unencrypted. They become encrypted on first authenticated access.
- */
-object EncryptedDiskSessions : SessionStorageBuilder<EncryptedDiskSessionsConfig> {
-    override fun createConfig() = EncryptedDiskSessionsConfig()
-
-    override fun build(config: EncryptedDiskSessionsConfig, application: Application): SessionRecordStorage {
-        val dataDir = config.customDataDir
-            ?: application.oauth.config.sessions.dataDir
-
-        // Encryption is handled by BearerSessionTracker
-        return FileStorageConfig(dataDir = dataDir).createStorage()
-    }
-}
-
-/**
  * Attribute key for storing the session key resolver function.
  * Used by BearerSessionTransport to resolve session keys from JWTs.
  */
@@ -382,6 +326,14 @@ class CleanupConfig(
  *     session<MySession>()
  * }
  * ```
+ *
+ * Session encryption is enabled by default. To disable:
+ * ```kotlin
+ * install(OAuthSessions) {
+ *     encrypted = false
+ *     session<MySession>()
+ * }
+ * ```
  */
 @OAuthDsl
 class OAuthSessionsPluginConfig {
@@ -391,6 +343,28 @@ class OAuthSessionsPluginConfig {
     private var storageExplicitlyConfigured = false
     internal var cleanupConfig: CleanupConfig? = null
     private var cleanupExplicitlyConfigured = false
+
+    /**
+     * Enable session data encryption using per-client keys from JWT tokens.
+     * Enabled by default.
+     *
+     * When enabled:
+     * - Session data is encrypted with AES-256-GCM using a key embedded in each client's JWT
+     * - The server cannot decrypt session data without the client presenting their bearer token
+     * - [SessionKeyClaimsProvider] is auto-added to the authorization server
+     *
+     * Sessions written during provision flow (before JWT exists) are stored
+     * unencrypted. They become encrypted on first authenticated access.
+     *
+     * Example:
+     * ```kotlin
+     * install(OAuthSessions) {
+     *     encrypted = false  // Disable encryption
+     *     session<MySession>()
+     * }
+     * ```
+     */
+    var encrypted: Boolean = true
 
     /**
      * JWT claim name to use as the session key.
@@ -450,7 +424,7 @@ class OAuthSessionsPluginConfig {
      * Example:
      * ```kotlin
      * install(OAuthSessions) {
-     *     storage(EncryptedDiskSessions) {
+     *     storage(DiskSessions) {
      *         dataDir = "/secure/sessions"
      *     }
      *     session<MySession>()
@@ -567,7 +541,7 @@ class OAuthSessionsPluginConfig {
  *
  * This plugin extends Ktor's Sessions with OAuth-specific features:
  * - JWT ID (jti) based session transport (sessions bound to individual tokens by default)
- * - Automatic session encryption with per-client keys (when using EncryptedDiskSessions)
+ * - Automatic session encryption with per-client keys (enabled by default)
  * - Internal OAuth flow cookies (auth_request, provision_session)
  *
  * Must be installed after OAuth plugin.
@@ -600,9 +574,8 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
     // Build sessions blocks from config (reads defaults from application.conf)
     val sessionsBlocks = config.build(application.environment.config)
 
-    // Auto-add SessionKeyClaimsProvider if encrypted sessions are used
-    val usesEncryptedSessions = sessionsBlocks.any { it.builder == EncryptedDiskSessions }
-    if (usesEncryptedSessions) {
+    // Auto-add SessionKeyClaimsProvider if encryption is enabled
+    if (config.encrypted) {
         registry.localAuthServer?.let { authServer ->
             if (SessionKeyClaimsProvider !in authServer.claimsProviders) {
                 authServer.claimsProviders.add(0, SessionKeyClaimsProvider)
@@ -632,7 +605,7 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
         }.distinct()
 
         // Launch cleanup coroutine
-        application.launch {
+        val cleanupJob = application.launch {
             logger.info { "Session cleanup job started with interval $cleanupInterval" }
             while (isActive) {
                 delay(cleanupInterval)
@@ -649,6 +622,12 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
                     logger.info { "Session cleanup completed: $totalDeleted expired sessions removed" }
                 }
             }
+        }
+
+        // Cancel cleanup job on application shutdown
+        application.monitor.subscribe(ApplicationStopping) {
+            logger.info { "Session cleanup job stopping" }
+            cleanupJob.cancel()
         }
     }
 }

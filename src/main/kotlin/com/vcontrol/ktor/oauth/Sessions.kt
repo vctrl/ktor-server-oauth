@@ -1,5 +1,6 @@
 package com.vcontrol.ktor.oauth
 
+import com.vcontrol.ktor.oauth.config.CleanupConfig
 import com.vcontrol.ktor.oauth.config.configureOAuthSessions
 import com.vcontrol.ktor.oauth.session.DefaultSessionJson
 import com.vcontrol.ktor.oauth.session.SessionRecordStorage
@@ -10,7 +11,6 @@ import com.vcontrol.ktor.oauth.token.SessionKeyClaimsProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.events.*
 import io.ktor.server.application.*
-import io.ktor.server.config.*
 import io.ktor.server.sessions.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -18,6 +18,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlin.reflect.KClass
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 private val logger = KotlinLogging.logger {}
 
@@ -147,17 +149,17 @@ class DiskSessionsConfig : SessionsConfigBase() {
 
     /**
      * Override the session storage directory path.
-     * Default: from oauth.sessions.dataDir in application.conf
+     * Default: from oauth.sessions.dataPath in application.conf
      *
      * Example:
      * ```kotlin
      * sessions(DiskSessions) {
-     *     dataDir = "/var/lib/myapp/sessions"
+     *     dataPath = "/var/lib/myapp/sessions"
      *     session<MySession>()
      * }
      * ```
      */
-    var dataDir: String?
+    var dataPath: String?
         get() = customDataDir
         set(value) { customDataDir = value }
 
@@ -206,11 +208,11 @@ object DiskSessions : SessionStorageBuilder<DiskSessionsConfig> {
         config: DiskSessionsConfig,
         application: Application
     ): SessionRecordStorage {
-        val dataDir = config.customDataDir
-            ?: application.oauth.config.sessions.dataDir
+        val dataPath = config.customDataDir
+            ?: application.oauth.config.sessions.dataPath
 
         return FileStorageConfig(
-            dataDir = dataDir,
+            dataPath = dataPath,
             json = config.customJson ?: DefaultSessionJson
         ).createStorage()
     }
@@ -256,43 +258,20 @@ internal data class SessionsBlockConfig(
 }
 
 /**
- * Configuration for session cleanup background job.
- *
- * @param interval How often to run cleanup, or null to disable
+ * DSL builder for configuring session cleanup.
+ * Allows programmatic configuration that takes precedence over application.conf.
  */
 @OAuthDsl
-class CleanupConfig(
-    var interval: Duration? = null
-) {
-    companion object {
-        /**
-         * Load cleanup config from HOCON ApplicationConfig.
-         *
-         * Reads `oauth.sessions.cleanup.interval`:
-         * - Not set or "disabled": cleanup disabled (null interval)
-         * - ISO-8601 duration (e.g., "PT1H"): cleanup every hour
-         *
-         * Example application.conf:
-         * ```hocon
-         * oauth {
-         *     sessions {
-         *         cleanup {
-         *             interval = "PT1H"  # Every hour
-         *         }
-         *     }
-         * }
-         * ```
-         */
-        fun fromApplicationConfig(config: ApplicationConfig): CleanupConfig {
-            val intervalStr = config.propertyOrNull("oauth.sessions.cleanup.interval")?.getString()
-            val interval = when {
-                intervalStr == null -> null  // disabled by default
-                intervalStr == "disabled" -> null
-                else -> Duration.parse(intervalStr)  // ISO-8601: "PT1H"
-            }
-            return CleanupConfig(interval)
-        }
-    }
+class CleanupConfigBuilder {
+    var enabled: Boolean = false
+    var interval: Duration = 1.hours
+    var initialDelay: Duration = 5.minutes
+
+    internal fun build(): CleanupConfig = CleanupConfig(
+        enabled = enabled,
+        interval = interval,
+        initialDelay = initialDelay
+    )
 }
 
 /**
@@ -307,7 +286,7 @@ class CleanupConfig(
  * // Or with custom storage:
  * install(OAuthSessions) {
  *     storage(DiskSessions) {
- *         dataDir = "/tmp/sessions"
+ *         dataPath = "/tmp/sessions"
  *     }
  *     session<MySession>()
  * }
@@ -425,7 +404,7 @@ class OAuthSessionsPluginConfig {
      * ```kotlin
      * install(OAuthSessions) {
      *     storage(DiskSessions) {
-     *         dataDir = "/secure/sessions"
+     *         dataPath = "/secure/sessions"
      *     }
      *     session<MySession>()
      * }
@@ -448,7 +427,9 @@ class OAuthSessionsPluginConfig {
      * ```kotlin
      * install(OAuthSessions) {
      *     cleanup {
+     *         enabled = true
      *         interval = 1.hours
+     *         initialDelay = 5.minutes
      *     }
      *     session<MySession>()
      * }
@@ -456,11 +437,15 @@ class OAuthSessionsPluginConfig {
      *
      * Or via application.conf:
      * ```hocon
-     * oauth.sessions.cleanup.interval = "PT1H"
+     * oauth.sessions.cleanup {
+     *     enabled = true
+     *     interval = 1h
+     *     initialDelay = 5m
+     * }
      * ```
      */
-    fun cleanup(configure: CleanupConfig.() -> Unit) {
-        cleanupConfig = CleanupConfig().apply(configure)
+    fun cleanup(configure: CleanupConfigBuilder.() -> Unit) {
+        cleanupConfig = CleanupConfigBuilder().apply(configure).build()
         cleanupExplicitlyConfigured = true
     }
 
@@ -497,7 +482,7 @@ class OAuthSessionsPluginConfig {
                 is FileStorageConfig -> {
                     currentBuilder = DiskSessions
                     currentConfig = DiskSessionsConfig().apply {
-                        customDataDir = storageConfig.dataDir
+                        customDataDir = storageConfig.dataPath
                         // Preserve registered session types
                         @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
                         sessionTypes.putAll(existingSessionTypes)
@@ -525,13 +510,13 @@ class OAuthSessionsPluginConfig {
 
     /**
      * Build resolved cleanup config.
-     * Uses explicit config if set, otherwise loads from application.conf.
+     * Uses explicit DSL config if set, otherwise uses config from application.oauth.
      */
-    internal fun buildCleanupConfig(applicationConfig: ApplicationConfig): CleanupConfig {
+    internal fun buildCleanupConfig(application: Application): CleanupConfig {
         return if (cleanupExplicitlyConfigured && cleanupConfig != null) {
             cleanupConfig!!
         } else {
-            CleanupConfig.fromApplicationConfig(applicationConfig)
+            application.oauth.config.sessions.cleanup
         }
     }
 }
@@ -591,10 +576,9 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
     // Install sessions
     application.configureOAuthSessions()
 
-    // Build cleanup config and start background job if configured
-    val cleanupConfig = config.buildCleanupConfig(application.environment.config)
-    val cleanupInterval = cleanupConfig.interval
-    if (cleanupInterval != null && sessionsBlocks.isNotEmpty()) {
+    // Build cleanup config and start background job if enabled
+    val cleanupConfig = config.buildCleanupConfig(application)
+    if (cleanupConfig.enabled && sessionsBlocks.isNotEmpty()) {
         // Build storage instances for cleanup
         val storages = sessionsBlocks.map { block ->
             @Suppress("UNCHECKED_CAST")
@@ -606,9 +590,9 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
 
         // Launch cleanup coroutine
         val cleanupJob = application.launch {
-            logger.info { "Session cleanup job started with interval $cleanupInterval" }
+            logger.info { "Session cleanup job started with interval ${cleanupConfig.interval}, initial delay ${cleanupConfig.initialDelay}" }
+            delay(cleanupConfig.initialDelay)
             while (isActive) {
-                delay(cleanupInterval)
                 var totalDeleted = 0
                 for (storage in storages) {
                     try {
@@ -621,6 +605,7 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
                 if (totalDeleted > 0) {
                     logger.info { "Session cleanup completed: $totalDeleted expired sessions removed" }
                 }
+                delay(cleanupConfig.interval)
             }
         }
 

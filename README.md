@@ -185,7 +185,7 @@ install(OAuthSessions) {
 ```kotlin
 install(OAuthSessions) {
     storage(DiskSessions) {
-        dataDir = "/var/lib/myapp/sessions"
+        dataPath = "/var/lib/myapp/sessions"
         ttl = 30.days
     }
     session<MySession>()
@@ -250,7 +250,7 @@ oauth {
 
     sessions {
         type = "file"  # or "memory"
-        dataDir = ${user.home}"/.ktor-oauth/sessions"
+        dataPath = ${user.home}"/.ktor-oauth/sessions"
 
         cleanup {
             interval = "PT1H"  # ISO-8601 duration, or omit to disable

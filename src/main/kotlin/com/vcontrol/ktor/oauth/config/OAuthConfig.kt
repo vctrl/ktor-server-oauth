@@ -16,7 +16,7 @@ import kotlin.time.toKotlinDuration
  * oauth {
  *     server {
  *         routePrefix = "/.oauth"
- *         tokenExpiration = "PT2160H"  # 90 days
+ *         tokenExpiration = 90d
  *         authCodeStorage = "memory"
  *
  *         jwt {
@@ -34,13 +34,12 @@ import kotlin.time.toKotlinDuration
  *
  *     sessions {
  *         storage = "directory"
- *         dataDir = ${user.home}"/.ktor-oauth/sessions"
- *         ttl = "PT2160H"
- *         inactivityTimeout = "PT0S"
+ *         dataPath = ${user.home}"/.ktor-oauth/sessions"
+ *         ttl = 90d
  *         cleanup {
  *             enabled = false
- *             interval = "PT1H"
- *             initialDelay = "PT5M"
+ *             interval = 1h
+ *             initialDelay = 5m
  *         }
  *     }
  * }
@@ -111,18 +110,13 @@ data class EndpointsConfig(
 data class SessionsConfig(
     /** Session storage: "directory", "encrypted", or fully qualified class name */
     val storage: String = "directory",
-    /** Directory for session data */
-    val dataDir: String = System.getProperty("user.home") + "/.ktor-oauth/sessions",
+    /** Directory path for session data */
+    val dataPath: String = System.getProperty("user.home") + "/.ktor-oauth/sessions",
     /** Maximum session lifetime */
     val ttl: Duration = 90.days,
-    /** Inactivity timeout (Duration.ZERO = disabled) */
-    val inactivityTimeout: Duration = Duration.ZERO,
     /** Background cleanup configuration */
     val cleanup: CleanupConfig = CleanupConfig()
-) {
-    /** Whether inactivity-based expiration is enabled */
-    val inactivityEnabled: Boolean get() = inactivityTimeout.isPositive()
-}
+)
 
 /**
  * Cleanup scheduler configuration.
@@ -167,9 +161,8 @@ private fun Config.toEndpointsConfig(): EndpointsConfig = EndpointsConfig(
 
 private fun Config.toSessionsConfig(): SessionsConfig = SessionsConfig(
     storage = getStringOrDefault("storage", "directory"),
-    dataDir = getStringOrDefault("dataDir", System.getProperty("user.home") + "/.ktor-oauth/sessions"),
+    dataPath = getStringOrDefault("dataPath", System.getProperty("user.home") + "/.ktor-oauth/sessions"),
     ttl = getDurationOrDefault("ttl", 90.days),
-    inactivityTimeout = getDurationOrDefault("inactivityTimeout", Duration.ZERO),
     cleanup = if (hasPath("cleanup")) getConfig("cleanup").toCleanupConfig() else CleanupConfig()
 )
 

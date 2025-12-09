@@ -23,7 +23,7 @@ sealed interface StorageConfig {
          * oauth {
          *     sessions {
          *         type = "file"  # or "memory"
-         *         dataDir = "data/sessions"
+         *         dataPath = "data/sessions"
          *     }
          * }
          * ```
@@ -47,11 +47,11 @@ sealed interface StorageConfig {
 /**
  * Configuration for file-based session storage.
  *
- * @param dataDir Directory path for session files
+ * @param dataPath Directory path for session files
  * @param json Json serializer configuration
  */
 data class FileStorageConfig(
-    val dataDir: String,
+    val dataPath: String,
     val json: Json = DefaultSessionJson
 ) : StorageConfig {
 
@@ -62,12 +62,12 @@ data class FileStorageConfig(
         /**
          * Load file storage config from HOCON ApplicationConfig.
          *
-         * Reads `oauth.sessions.dataDir` for the directory path.
+         * Reads `oauth.sessions.dataPath` for the directory path.
          */
         fun fromApplicationConfig(config: ApplicationConfig): FileStorageConfig {
-            val dataDir = config.propertyOrNull("oauth.sessions.dataDir")?.getString()
+            val dataPath = config.propertyOrNull("oauth.sessions.dataPath")?.getString()
                 ?: "data/sessions"
-            return FileStorageConfig(dataDir = dataDir)
+            return FileStorageConfig(dataPath = dataPath)
         }
     }
 }

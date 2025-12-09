@@ -22,7 +22,7 @@ class FileSessionRecordStorage(
     private val config: FileStorageConfig
 ) : SessionRecordStorage {
 
-    private val directory = File(config.dataDir)
+    private val directory = File(config.dataPath)
     private val json = config.json
     private val recordSerializer = FileSessionRecord.serializer()
 

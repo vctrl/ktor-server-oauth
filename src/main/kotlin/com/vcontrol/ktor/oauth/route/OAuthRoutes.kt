@@ -1,12 +1,12 @@
 package com.vcontrol.ktor.oauth.route
 
-import com.vcontrol.ktor.oauth.oauth
-import com.vcontrol.ktor.oauth.model.*
 import com.vcontrol.ktor.oauth.baseUrl
-import io.ktor.http.HttpStatusCode
+import com.vcontrol.ktor.oauth.model.*
+import com.vcontrol.ktor.oauth.oauth
+import io.ktor.http.*
 import io.ktor.server.application.*
-import io.ktor.server.auth.AuthenticationRouteSelector
-import io.ktor.server.response.respond
+import io.ktor.server.auth.*
+import io.ktor.server.response.*
 import io.ktor.server.routing.*
 
 /**
@@ -92,11 +92,15 @@ fun Application.configureOAuthRoutes() {
 /**
  * Find the auth provider name for a given path by introspecting the route tree.
  * Traverses all routes and looks for AuthenticationRouteSelector in the parent chain.
- * Used by protected resource metadata endpoint.
+ * Used by protected resource metadata endpoint and resource URL resolution.
+ *
+ * Note: RFC 8707 resource indicators are URLs without HTTP method info, so if only
+ * some methods are authenticated on a path (e.g., POST but not GET), this will still
+ * return the provider for that path. This is a limitation of the resource indicator spec.
  */
-private fun Application.findAuthProviderForPath(path: String): String? {
-    // Get the root routing node
+internal fun Application.findAuthProviderForPath(path: String): String? {
     val rootRoute = this.routing {}
+    val targetSegments = path.trim('/').split('/').filter { it.isNotEmpty() }
 
     // Collect all routes recursively
     fun collectRoutes(route: Route): List<Route> {
@@ -110,11 +114,18 @@ private fun Application.findAuthProviderForPath(path: String): String? {
 
     val allRoutes = collectRoutes(rootRoute)
 
-    // Find routes that match this path
-    for (route in allRoutes) {
-        val routePath = route.toString()
-        if (routePath == path || path.startsWith("$routePath/") || routePath.startsWith("$path/")) {
-            // Traverse up looking for AuthenticationRouteSelector
+    // Find routes whose path segments match or are a prefix of the target
+    // Sort by segment count descending to find most specific match first
+    for (route in allRoutes.sortedByDescending { it.pathSegments().size }) {
+        val routeSegments = route.pathSegments()
+        if (routeSegments.isEmpty()) continue
+
+        // Check if route path matches or is a prefix of target path
+        val isMatch = routeSegments == targetSegments ||
+            (routeSegments.size <= targetSegments.size &&
+             targetSegments.subList(0, routeSegments.size) == routeSegments)
+
+        if (isMatch) {
             val provider = route.findAuthProvider()
             if (provider != null) {
                 return provider
@@ -122,6 +133,23 @@ private fun Application.findAuthProviderForPath(path: String): String? {
         }
     }
     return null
+}
+
+/**
+ * Collect path segments from a route by walking up and checking PathSegmentConstantRouteSelector.value
+ */
+private fun Route.pathSegments(): List<String> {
+    val segments = mutableListOf<String>()
+    var current: Route? = this
+    while (current != null) {
+        val node = current as? RoutingNode
+        val selector = node?.selector
+        if (selector is PathSegmentConstantRouteSelector) {
+            segments.add(0, selector.value)
+        }
+        current = node?.parent
+    }
+    return segments
 }
 
 /**

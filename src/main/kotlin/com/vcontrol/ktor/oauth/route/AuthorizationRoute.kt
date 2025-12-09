@@ -8,7 +8,6 @@ import com.vcontrol.ktor.oauth.model.AuthorizationResult
 import com.vcontrol.ktor.oauth.model.CodeChallengeMethod
 import com.vcontrol.ktor.oauth.model.OAuthError
 import com.vcontrol.ktor.oauth.model.ResponseType
-import com.vcontrol.ktor.oauth.AuthorizationProvider
 import com.vcontrol.ktor.oauth.model.ProvisionSession
 import com.vcontrol.ktor.oauth.token.ProvisionClaims
 import java.util.UUID
@@ -57,7 +56,7 @@ fun Routing.configureAuthorizationRoutes() {
             if (isReturningFromProvision) {
                 // Returning from /provision - use saved request (includes provider) and clear it
                 call.sessions.clear<AuthorizationRequest>()
-                request = savedRequest!!
+                request = savedRequest
 
                 // Read identity, claims from provision session and clear it
                 val provisionSession = call.sessions.get<ProvisionSession>()
@@ -69,17 +68,18 @@ fun Routing.configureAuthorizationRoutes() {
                 // New authorization request - get resource from resource param (RFC 8707)
                 val resourceParam = params["resource"]
 
-                // Resolve provider: if resource is a URL, check if path segment matches a provider
+                // Resolve provider: if resource is a URL, use route introspection to find provider
                 val providerName = when {
                     resourceParam == null -> null
                     resourceParam.contains("://") -> {
-                        // Resource is a URL - extract path and check segments for provider match
+                        // Resource is a URL - find auth provider by introspecting route tree
                         val path = resourceParam.removePrefix(call.baseUrl)
-                        path.trim('/').split('/').firstOrNull { registry.authProviders.containsKey(it) }
+                        call.application.findAuthProviderForPath(path)
                     }
                     registry.authProviders.containsKey(resourceParam) -> resourceParam
                     else -> null  // Unknown resource name, fall back to default
                 }
+
                 logger.debug { "Resolved provider: resource=$resourceParam -> provider=$providerName (registered: ${registry.authProviders.keys})" }
 
                 request = AuthorizationRequest(

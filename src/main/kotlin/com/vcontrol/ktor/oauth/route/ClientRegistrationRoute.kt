@@ -1,6 +1,5 @@
 package com.vcontrol.ktor.oauth.route
 
-import com.vcontrol.ktor.oauth.baseUrl
 import com.vcontrol.ktor.oauth.oauth
 import com.vcontrol.ktor.oauth.model.*
 import com.vcontrol.ktor.oauth.token.TokenUtils
@@ -15,12 +14,8 @@ private val logger = KotlinLogging.logger {}
 /**
  * Configure OAuth Dynamic Client Registration endpoint
  * RFC 7591: https://datatracker.ietf.org/doc/html/rfc7591
- * RFC 8707: https://datatracker.ietf.org/doc/html/rfc8707 (Resource Indicators)
  *
  * Controlled by authorizationServer { openRegistration = false } in OAuth DSL (default: true)
- *
- * Accepts optional ?resource= query parameter to specify which resource
- * to use for this client.
  *
  * Note: Credentials are ephemeral - returned to client but not persisted.
  * Security is ensured by PKCE during the authorization flow.
@@ -40,20 +35,6 @@ fun Routing.configureClientRegistrationRoutes() {
     post(serverConfig.endpoint(serverConfig.endpoints.register)) {
         try {
             val request = call.receive<ClientRegistrationRequest>()
-
-            // Get provider from ?resource= query param (RFC 8707)
-            val resourceParam = call.request.queryParameters["resource"]
-
-            // Resolve provider: if resource is a URL, check if path segment matches a provider
-            val providerName = when {
-                resourceParam == null -> null
-                resourceParam.contains("://") -> {
-                    val path = resourceParam.removePrefix(call.baseUrl)
-                    path.trim('/').split('/').firstOrNull { application.oauth.authProviders.containsKey(it) }
-                }
-                application.oauth.authProviders.containsKey(resourceParam) -> resourceParam
-                else -> null  // Unknown resource name, fall back to default
-            }
 
             // Generate client credentials (ephemeral - not persisted)
             val clientId = TokenUtils.generateClientId()
@@ -76,7 +57,7 @@ fun Routing.configureClientRegistrationRoutes() {
                 tokenEndpointAuthMethod = request.tokenEndpointAuthMethod ?: TokenEndpointAuthMethod.None
             )
 
-            logger.trace { "Generated ephemeral OAuth client: ${clientId.take(8)}... (provider: ${providerName ?: "default"})" }
+            logger.trace { "Generated ephemeral OAuth client: ${clientId.take(8)}..." }
 
             call.respond(HttpStatusCode.Created, response)
 

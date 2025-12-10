@@ -79,6 +79,9 @@ class OAuthProviderConfig(val name: String?) {
     /** JWT realm for WWW-Authenticate header. Defaults to JWT issuer if null. */
     var realm: String? = null
 
+    /** Service documentation URL for OAuth metadata (RFC 8414). Per-provider. */
+    var serviceDocumentation: String? = null
+
     /** Per-provider validation function */
     internal var validateFn: (suspend JWTCredential.() -> Principal?)? = null
 
@@ -142,6 +145,9 @@ fun AuthenticationConfig.oauthJwt(
     // Get OAuth registry
     val registry = application.oauthOrNull
         ?: error("OAuth plugin must be installed before configuring oauth() authentication providers")
+
+    // Register provider config for metadata lookup (serviceDocumentation, etc.)
+    registry.registerJwtProviderConfig(providerConfig)
 
     val authServer = registry.localAuthServer
         ?: error("OAuth server not configured - use authorizationServer(LocalAuthServer) { } in install(OAuth)")

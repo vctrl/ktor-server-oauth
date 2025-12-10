@@ -47,6 +47,7 @@ fun Application.configureServerPlugins() {
             prettyPrint = true
             ignoreUnknownKeys = true
             encodeDefaults = true  // Ensure all OAuth metadata fields are included
+            explicitNulls = false  // Omit null fields (good practice)
             namingStrategy = JsonNamingStrategy.SnakeCase
         })
     }
@@ -72,7 +73,7 @@ fun Application.configureServerPlugins() {
             logger.debug { "Invalid request: ${cause.message}" }
             call.respond(
                 HttpStatusCode.BadRequest,
-                mapOf("error" to (cause.message ?: "Bad Request"))
+                mapOf("error" to "invalid_request", "error_description" to (cause.message ?: "Bad Request"))
             )
         }
 

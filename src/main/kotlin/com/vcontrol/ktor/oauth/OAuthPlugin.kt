@@ -38,6 +38,27 @@ class OAuthRegistry(
         get() = _authProviders
 
     /**
+     * JWT provider configurations from oauthJwt { } blocks.
+     * Key is provider name (null for default provider).
+     * Used to look up per-provider serviceDocumentation for OAuth metadata.
+     */
+    private val _jwtProviderConfigs = mutableMapOf<String?, OAuthProviderConfig>()
+
+    /**
+     * Register a JWT provider config (called from oauthJwt { }).
+     */
+    internal fun registerJwtProviderConfig(config: OAuthProviderConfig) {
+        _jwtProviderConfigs[config.name] = config
+    }
+
+    /**
+     * Get JWT provider config by name.
+     */
+    fun getJwtProviderConfig(name: String?): OAuthProviderConfig? {
+        return _jwtProviderConfigs[name]
+    }
+
+    /**
      * Token issuer for the local auth server.
      * Created during authentication configuration.
      */

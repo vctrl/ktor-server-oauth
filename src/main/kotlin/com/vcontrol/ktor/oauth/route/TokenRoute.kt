@@ -70,6 +70,7 @@ private suspend fun ApplicationCall.receiveTokenRequest(): TokenRequest {
             ?: throw IllegalArgumentException("grant_type is required")
         TokenRequest(
             grantType = parseGrantType(grantTypeStr),
+            // client_id is optional when PKCE is used (code_verifier authenticates the client)
             clientId = params["client_id"],
             clientName = params["client_name"],
             clientSecret = params["client_secret"],
@@ -181,6 +182,10 @@ private suspend fun RoutingContext.handleClientCredentialsGrant(
 /**
  * Handle authorization_code grant type with PKCE.
  * Uses provider context from the stored auth code for token configuration.
+ *
+ * Note: client_id is optional when PKCE is used. Per RFC 7636, the code_verifier
+ * proves the caller is the same party that initiated the authorization request.
+ * Claude Code CLI omits client_id and sends 'resource' (RFC 8707) instead.
  */
 private suspend fun RoutingContext.handleAuthorizationCodeGrant(
     request: TokenRequest,
@@ -188,15 +193,15 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
     authCodeStorage: AuthCodeStorage
 ) {
     val code = request.code
-    val clientId = request.clientId
+    val clientId = request.clientId  // Optional with PKCE
     val redirectUri = request.redirectUri
     val codeVerifier = request.codeVerifier
 
-    // Validate required parameters
-    if (code == null || clientId == null || redirectUri == null || codeVerifier == null) {
+    // Validate required parameters (client_id optional with PKCE)
+    if (code == null || redirectUri == null || codeVerifier == null) {
         val error = OAuthError(
             error = OAuthError.INVALID_REQUEST,
-            errorDescription = "code, client_id, redirect_uri, and code_verifier are required"
+            errorDescription = "code, redirect_uri, and code_verifier are required"
         )
         call.respond(HttpStatusCode.BadRequest, error)
         return
@@ -213,8 +218,8 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
         return
     }
 
-    // Verify client_id matches
-    if (authCode.clientId != clientId) {
+    // Verify client_id matches (if provided)
+    if (clientId != null && authCode.clientId != clientId) {
         val error = OAuthError(
             error = OAuthError.INVALID_GRANT,
             errorDescription = "client_id does not match authorization code"
@@ -233,7 +238,7 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
         return
     }
 
-    // Verify PKCE code_verifier
+    // Verify PKCE code_verifier (this proves the caller is legitimate)
     if (!verifyPkce(codeVerifier, authCode.codeChallenge, authCode.codeChallengeMethod)) {
         val error = OAuthError(
             error = OAuthError.INVALID_GRANT,
@@ -253,7 +258,8 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
         ?: error("Token issuer not configured")
 
     // Pass claims from auth code to be embedded in the JWT
-    issueTokenResponse(tokenIssuer, clientId, authCode.jti, request.clientName, authCode.scope, expiration, authCode.claims)
+    // Use client_id from stored auth code (request.clientId may be null with PKCE)
+    issueTokenResponse(tokenIssuer, authCode.clientId, authCode.jti, request.clientName, authCode.scope, expiration, authCode.claims)
 }
 
 /**

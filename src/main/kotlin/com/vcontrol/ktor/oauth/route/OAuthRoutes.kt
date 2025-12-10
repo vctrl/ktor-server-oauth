@@ -21,8 +21,9 @@ import io.ktor.server.routing.*
  */
 fun Application.configureOAuthRoutes() {
     val serverConfig = oauth.config.server
-    // Get openRegistration from local auth server config
-    val localAuthServer = oauth.localAuthServer
+    val registry = oauth
+    // Get config from local auth server
+    val localAuthServer = registry.localAuthServer
     val openRegistration = localAuthServer?.openRegistration ?: true
 
     routing {
@@ -33,15 +34,18 @@ fun Application.configureOAuthRoutes() {
             val baseUrl = call.baseUrl
             val pathSegments = call.parameters.getAll("path") ?: emptyList()
 
-            // Extract resource from path (e.g., "/r/calendar" -> "calendar")
-            val resource = if (pathSegments.size >= 2 && pathSegments[0] == "r") {
+            // Extract resource/provider from path (e.g., "/r/calendar" -> "calendar")
+            val providerName = if (pathSegments.size >= 2 && pathSegments[0] == "r") {
                 pathSegments.drop(1).joinToString("/")
             } else {
                 null
             }
 
+            // Look up per-provider serviceDocumentation
+            val serviceDocumentation = providerName?.let { registry.getJwtProviderConfig(it)?.serviceDocumentation }
+
             // Build endpoint URLs with resource param baked in (empty for default)
-            val resourceParam = resource?.let { "?resource=$it" } ?: ""
+            val resourceParam = providerName?.let { "?resource=$it" } ?: ""
             val issuerPath = if (pathSegments.isEmpty()) "" else "/" + pathSegments.joinToString("/")
 
             val metadata = AuthorizationServerMetadata(
@@ -55,6 +59,7 @@ fun Application.configureOAuthRoutes() {
                     TokenEndpointAuthMethod.ClientSecretPost,
                     TokenEndpointAuthMethod.ClientSecretBasic
                 ),
+                serviceDocumentation = serviceDocumentation,
                 codeChallengeMethodsSupported = listOf(CodeChallengeMethod.S256)
             )
             call.respond(HttpStatusCode.OK, metadata)

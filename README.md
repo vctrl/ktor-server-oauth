@@ -60,7 +60,7 @@ Many applications need user-provided configuration that OAuth alone can't handle
 
 ```kotlin
 dependencies {
-    implementation("com.vcontrol:ktor-server-oauth:0.4.5")
+    implementation("com.vcontrol:ktor-server-oauth:0.4.10")
 }
 ```
 

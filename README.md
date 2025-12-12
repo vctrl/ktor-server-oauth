@@ -102,7 +102,9 @@ fun Application.module() {
             post {
                 val params = call.receiveParameters()
                 call.sessions.set(MySession(apiKey = params["api_key"]))
-                complete(claims = mapOf("username" to params["username"]))
+                call.provision.complete {
+                    withClaim("username", params["username"])
+                }
             }
         }
 
@@ -181,17 +183,18 @@ install(OAuth) {
     server {
         // Client validation
         clients {
-            // Dynamic registration (RFC 7591)
+            // Dynamic registration (RFC 7591) - public clients only
             // Has access to: origin, headers, resource, request
             registration = true  // or:
-            // registration { clientId, clientName ->
+            // registration { clientName ->
             //     origin.remoteHost in allowedIps
             // }
 
-            // Client credentials grant
+            // Confidential clients with pre-configured credentials
+            // Validated at /token (RFC 6749 Section 2.3)
             // Has access to: origin, headers, resource, request
             credentials { clientId, secret ->
-                origin.remoteHost !in blockedIps && db.check(clientId, secret)
+                clientId == "my-app" && secret == "my-secret"
             }
             // Or static: credentials("app" to "secret", "app2" to "secret2")
         }
@@ -372,7 +375,9 @@ routing {
                 call.sessions.set(MySession(apiKey = apiKey))
 
                 // Complete with claims embedded in JWT
-                complete(claims = mapOf("validated" to "true"))
+                call.provision.complete {
+                    withClaim("validated", "true")
+                }
             } else {
                 call.respondText("Invalid API key")
             }
@@ -387,13 +392,16 @@ routing {
 
 ### Provision Context
 
-Handlers receive `ProvisionRoutingContext` with:
+Access provision context via `call.provision`:
 
 | Property | Description |
 |----------|-------------|
-| `call` | The Ktor `ApplicationCall` (use `call.sessions` for session access) |
-| `clientId` | The OAuth client ID |
-| `complete()` | Complete provision and continue OAuth flow |
+| `call.provision.client` | The client identity (clientId and optionally clientName) |
+| `call.provision.complete {}` | Complete provision with optional claims builder |
+
+The claims builder supports:
+- `withClaim(key, value)` - Plain claims in JWT
+- `withEncryptedClaim(key, value)` - Encrypted claims (use `payload.decryptClaim()` to read)
 
 ## Multiple Providers
 
@@ -410,7 +418,11 @@ routing {
     // Provision routes
     provision { /* default provider */ }
     provision("calendar") {
-        handle { complete(claims = mapOf("scope" to "calendar")) }
+        post {
+            call.provision.complete {
+                withClaim("scope", "calendar")
+            }
+        }
     }
 
     // Protected routes
@@ -437,7 +449,7 @@ The plugin automatically discovers which routes are protected by which provider 
      │  { redirect_uris: [...] }               │
      │ ───────────────────────────────────────>│
      │                                         │
-     │  { client_id, client_secret }           │
+     │  { client_id }  (public client)         │
      │ <───────────────────────────────────────│
      │                                         │
      │  GET /authorize?client_id=...           │

@@ -66,9 +66,10 @@ data class AuthorizationServerMetadata(
     val tokenEndpoint: String,
     val registrationEndpoint: String? = null,
     val jwksUri: String? = null,
-    val responseTypesSupported: List<ResponseType> = listOf(ResponseType.Token),
-    val grantTypesSupported: List<GrantType> = listOf(GrantType.ClientCredentials),
+    val responseTypesSupported: List<ResponseType> = listOf(ResponseType.Code),
+    val grantTypesSupported: List<GrantType> = listOf(GrantType.AuthorizationCode),
     val tokenEndpointAuthMethodsSupported: List<TokenEndpointAuthMethod> = listOf(
+        TokenEndpointAuthMethod.None,
         TokenEndpointAuthMethod.ClientSecretPost,
         TokenEndpointAuthMethod.ClientSecretBasic
     ),

@@ -1,30 +1,31 @@
 package com.vcontrol.ktor.oauth
 
+import com.vcontrol.ktor.oauth.model.ClientIdentity
 import com.vcontrol.ktor.oauth.token.TokenClaimsProvider
 import kotlin.time.Duration
 
 /**
  * Base class for authorization server configurations.
- * Both local and external auth servers can have a global client validator.
  */
 @OAuthDsl
 sealed class AuthServerConfig(val name: String?) {
-    /** Global client validator (blocklist) */
-    internal var clientValidator: ClientValidator? = null
-
-    /**
-     * Global client validation (blocklist).
-     * Called after JWT signature is verified, before resource-level validation.
-     * Return true to allow, false to reject.
-     *
-     * Example:
-     * ```kotlin
-     * client { clientId -> clientId !in blockedClients }
-     * ```
-     */
-    fun client(validator: ClientValidator) {
-        clientValidator = validator
-    }
+    // TODO: Revisit ClientValidator - may be redundant with sealed ClientIdentity
+    // /** Global client validator (blocklist) */
+    // internal var clientValidator: ClientValidator? = null
+    //
+    // /**
+    //  * Global client validation (blocklist).
+    //  * Called after JWT signature is verified, before resource-level validation.
+    //  * Return true to allow, false to reject.
+    //  *
+    //  * Example:
+    //  * ```kotlin
+    //  * client { clientId -> clientId !in blockedClients }
+    //  * ```
+    //  */
+    // fun client(validator: ClientValidator) {
+    //     clientValidator = validator
+    // }
 }
 
 /**
@@ -33,25 +34,23 @@ sealed class AuthServerConfig(val name: String?) {
  *
  * Example:
  * ```kotlin
- * authorizationServer(LocalAuthServer) {
- *     openRegistration = true
+ * server {
+ *     clients {
+ *         registration = true
+ *         credentials { clientId, secret -> db.check(clientId, secret) }
+ *     }
  *     tokenExpiration = 90.days
- *     client { clientId -> clientId !in blockedClients }
  *     claims(SessionKeyClaimsProvider)
- *     clientCredentials { id, secret -> validate(id, secret) }
  * }
  * ```
  */
 @OAuthDsl
 class LocalAuthServerConfig(name: String? = null) : AuthServerConfig(name) {
-    /** Enable dynamic client registration */
-    var openRegistration: Boolean = true
-
     /** Token expiration (overrides application.conf) */
     var tokenExpiration: Duration? = null
 
-    /** Client credentials validator for client_credentials grant */
-    internal var clientCredentialsValidator: CredentialValidator? = null
+    /** Grants configuration */
+    internal val grantsConfig = GrantsConfig()
 
     /** Custom JWT ID provider for generating jti claims */
     internal var jwtIdProvider: JwtIdProvider? = null
@@ -59,35 +58,72 @@ class LocalAuthServerConfig(name: String? = null) : AuthServerConfig(name) {
     /** Custom claims providers for JWT tokens */
     internal val claimsProviders = mutableListOf<TokenClaimsProvider>()
 
+    /** Client validation configuration */
+    internal var clientsConfig: ClientsConfig? = null
+
     /**
-     * Configure client_credentials grant validation.
-     * Return true to allow, false to reject.
+     * Configure client validation for registration and authorization.
+     *
+     * Both validators receive [RequestContext] as receiver with access to:
+     * [RequestContext.request], [RequestContext.resource], [RequestContext.origin], [RequestContext.headers].
      *
      * Example:
      * ```kotlin
-     * clientCredentials { clientId, clientSecret ->
-     *     clientId == "my-service" && clientSecret == "secret"
+     * server {
+     *     clients {
+     *         // Allow dynamic registration (RFC 7591)
+     *         registration = true
+     *         // Or with condition:
+     *         // registration { clientId, clientName -> origin.remoteHost in allowedIps }
+     *
+     *         // Credential validation at /token (RFC 6749 Section 2.3)
+     *         credentials { clientId, secret ->
+     *             when {
+     *                 secret == null -> true  // Allow open registration (public clients)
+     *                 else -> clientId == "my-app" && secret == "my-secret"
+     *             }
+     *         }
+     *         // Or static:
+     *         // credentials("app" to "secret", "app2" to "secret2")
+     *     }
      * }
      * ```
      */
-    fun clientCredentials(validator: CredentialValidator) {
-        clientCredentialsValidator = validator
+    fun clients(block: ClientsConfig.() -> Unit) {
+        clientsConfig = ClientsConfig().apply(block)
+    }
+
+    /**
+     * Configure grants (future: refresh token settings, etc.).
+     *
+     * Example:
+     * ```kotlin
+     * grants {
+     *     // Future: refreshToken { lifetime = 30.days }
+     * }
+     * ```
+     */
+    fun grants(block: GrantsConfig.() -> Unit) {
+        grantsConfig.apply(block)
     }
 
     /**
      * Configure custom JWT ID (jti) generation.
-     * Called at the start of each authorization flow to generate a unique token ID.
      * Default generates UUID if not configured.
      *
+     * Note: Currently jti is generated at /authorize time (before TokenRequest exists),
+     * so this provider is not called for authorization_code flow. Future use for
+     * refresh token flows.
+     *
      * The jti is used for:
-     * - Session keying during provision (safer than client_id)
      * - Token identity in the final JWT
      * - Token revocation tracking
      *
      * Example:
      * ```kotlin
-     * jwtId { clientId -> "${clientId}_${UUID.randomUUID()}" }
-     * jwtId { clientId -> tokenIdService.generateAndStore(clientId) }
+     * jwtId { request ->
+     *     UUID.randomUUID().toString()
+     * }
      * ```
      */
     fun jwtId(provider: JwtIdProvider) {
@@ -111,12 +147,155 @@ class LocalAuthServerConfig(name: String? = null) : AuthServerConfig(name) {
 }
 
 /**
- * Configuration for an external authorization server (validates tokens from elsewhere).
- * Multiple external auth servers can be configured, each must be named.
+ * Configuration for OAuth grants and flows.
+ *
+ * Currently a placeholder for future grant-specific settings like:
+ * - Refresh token configuration (lifetime, rotation)
+ * - Authorization code configuration (PKCE requirements)
+ */
+@OAuthDsl
+class GrantsConfig {
+    // Future: refresh token settings
+    // var refreshTokenLifetime: Duration? = null
+    // var rotateRefreshToken: Boolean = true
+
+    // Future: authorization code settings
+    // var pkceRequired: Boolean = true
+}
+
+/**
+ * Configuration for client validation.
+ *
+ * Two independent concerns:
+ *
+ * **1. Dynamic Registration (`registration`)** - RFC 7591
+ * Controls who can call `/register` to obtain a client_id.
+ * Dynamic registration always produces **public clients** (no client_secret).
+ * Public clients authenticate via PKCE at `/token`.
+ *
+ * **2. Pre-configured Credentials (`credentials`)** - RFC 6749 Section 2.3
+ * For **confidential clients** with pre-shared secrets.
+ * Validates client_secret at `/token` endpoint.
+ * These clients skip `/register` - they already have credentials.
+ *
+ * Both validators receive [RequestContext] as receiver with access to:
+ * - [RequestContext.request] - Full request for headers, etc.
+ * - [RequestContext.resource] - Auth provider/resource name
+ * - [RequestContext.origin] - Remote host, port, etc.
+ * - [RequestContext.headers] - Request headers
  *
  * Example:
  * ```kotlin
- * authorizationServer("partner", ExternalAuthServer) {
+ * // Public clients via dynamic registration
+ * clients {
+ *     registration = true
+ * }
+ *
+ * // Confidential clients with pre-configured credentials
+ * clients {
+ *     credentials { clientId, secret ->
+ *         clientId == "my-app" && secret == "my-secret"
+ *     }
+ * }
+ * ```
+ */
+@OAuthDsl
+class ClientsConfig {
+    /** Registration validator - null means registration disabled */
+    internal var registrationValidator: RegistrationValidator? = null
+
+    /** Credentials validator - null means credentials disabled */
+    internal var credentialsValidator: CredentialsValidator? = null
+
+    /**
+     * Enable or disable dynamic registration (RFC 7591).
+     *
+     * When enabled, the /register endpoint accepts client registrations.
+     * Dynamic registration always produces **public clients** - no client_secret
+     * is issued. Public clients authenticate via PKCE at /token.
+     *
+     * Example:
+     * ```kotlin
+     * clients {
+     *     registration = true  // Allow all registrations (public clients)
+     * }
+     * ```
+     */
+    var registration: Boolean
+        get() = registrationValidator != null
+        set(value) {
+            registrationValidator = if (value) ({ _ -> true }) else null
+        }
+
+    /**
+     * Enable dynamic registration with a condition.
+     *
+     * Receives clientName (from request) with [RequestContext] as receiver
+     * for access to request, resource, origin, and headers.
+     *
+     * Example:
+     * ```kotlin
+     * clients {
+     *     registration { clientName ->
+     *         origin.remoteHost in allowedIps
+     *     }
+     * }
+     * ```
+     */
+    fun registration(block: RegistrationValidator) {
+        registrationValidator = block
+    }
+
+    /**
+     * Configure credential validation at /token (RFC 6749 Section 2.3).
+     *
+     * Called at /token to validate client credentials:
+     * - If `secret` is null: client came from open registration (public client, uses PKCE)
+     * - If `secret` is non-null: client is using pre-configured credentials (confidential client)
+     *
+     * Receives clientId and secret (nullable) as parameters, with [RequestContext] as receiver
+     * for access to request, resource, origin, and headers.
+     *
+     * Example:
+     * ```kotlin
+     * clients {
+     *     credentials { clientId, secret ->
+     *         when {
+     *             secret == null -> true  // Allow open registration (public clients)
+     *             else -> clientId == "my-app" && secret == "my-secret"
+     *         }
+     *     }
+     * }
+     * ```
+     */
+    fun credentials(block: CredentialsValidator) {
+        credentialsValidator = block
+    }
+
+    /**
+     * Configure credential validation with static credentials.
+     *
+     * Example:
+     * ```kotlin
+     * clients {
+     *     credentials("app" to "secret", "app2" to "secret2")
+     * }
+     * ```
+     */
+    fun credentials(vararg pairs: Pair<String, String>) {
+        val map = pairs.toMap()
+        credentialsValidator = { clientId, secret -> map[clientId] == secret }
+    }
+}
+
+/**
+ * Configuration for an external authorization server (validates tokens from elsewhere).
+ *
+ * **Not yet implemented** - placeholder for future external OAuth provider support.
+ *
+ * Example (future):
+ * ```kotlin
+ * server("partner", External) {
  *     jwksUri = "https://partner.example/.well-known/jwks.json"
  *     issuer = "https://partner.example"
  * }
@@ -140,20 +319,23 @@ interface AuthServerBuilder<C : AuthServerConfig> {
 
 /**
  * Builder for local authorization server.
- * Use with unnamed `authorizationServer(LocalAuthServer) { }` for default,
- * or named `authorizationServer("name", LocalAuthServer) { }`.
+ * Use with unnamed `server { }` for default,
+ * or `server(Local) { }` for explicit builder.
  */
-object LocalAuthServer : AuthServerBuilder<LocalAuthServerConfig> {
+object Local : AuthServerBuilder<LocalAuthServerConfig> {
     override fun createConfig(name: String?) = LocalAuthServerConfig(name)
 }
 
 /**
  * Builder for external authorization server.
- * Must be named: `authorizationServer("partner", ExternalAuthServer) { }`.
+ * Must be named: `server("partner", External) { }`.
+ *
+ * **Not yet implemented** - placeholder for future external OAuth provider support.
  */
-object ExternalAuthServer : AuthServerBuilder<ExternalAuthServerConfig> {
+object External : AuthServerBuilder<ExternalAuthServerConfig> {
     override fun createConfig(name: String?): ExternalAuthServerConfig {
         requireNotNull(name) { "External auth server must have a name" }
         return ExternalAuthServerConfig(name)
     }
 }
+

@@ -36,7 +36,7 @@ class AuthorizationProvider(
      * Assumes setup is already complete (session config exists).
      *
      * @param request OAuth authorization request parameters
-     * @param identity Authorization identity (clientId, jti, providerName)
+     * @param identity Authorization identity (jti, providerName, client)
      * @param claims Claims from provision flow to embed in the token
      * @return AuthorizationResult indicating next action
      */
@@ -124,7 +124,7 @@ class AuthorizationProvider(
 
     /**
      * Generate authorization code and prepare redirect response.
-     * Includes identity and claims for token exchange.
+     * Embeds full identity for token exchange.
      */
     private fun generateAuthorizationCode(
         request: AuthorizationRequest,
@@ -136,15 +136,13 @@ class AuthorizationProvider(
 
         val authorization = AuthorizationCode(
             code = authCode,
-            clientId = identity.clientId,
-            jti = identity.jti,
+            identity = identity,
             redirectUri = request.redirectUri,
             codeChallenge = request.codeChallenge,
             codeChallengeMethod = request.codeChallengeMethod,
             state = request.state,
             scope = request.scope,
             createdAt = now,
-            providerName = identity.providerName,
             claims = claims
         )
 

@@ -24,7 +24,8 @@ fun Application.configureOAuthRoutes() {
     val registry = oauth
     // Get config from local auth server
     val localAuthServer = registry.localAuthServer
-    val openRegistration = localAuthServer?.openRegistration ?: true
+    // Registration is enabled if registration validator is configured in clients {}
+    val registrationEnabled = localAuthServer?.clientsConfig?.registrationValidator != null
 
     routing {
         // OAuth Authorization Server Metadata (RFC 8414)
@@ -52,10 +53,11 @@ fun Application.configureOAuthRoutes() {
                 issuer = "$baseUrl$issuerPath",
                 authorizationEndpoint = "$baseUrl${serverConfig.endpoint(serverConfig.endpoints.authorize)}$resourceParam",
                 tokenEndpoint = "$baseUrl${serverConfig.endpoint(serverConfig.endpoints.token)}$resourceParam",
-                registrationEndpoint = if (openRegistration) "$baseUrl${serverConfig.endpoint(serverConfig.endpoints.register)}$resourceParam" else null,
-                grantTypesSupported = listOf(GrantType.AuthorizationCode, GrantType.ClientCredentials),
-                responseTypesSupported = listOf(ResponseType.Code, ResponseType.Token),
+                registrationEndpoint = if (registrationEnabled) "$baseUrl${serverConfig.endpoint(serverConfig.endpoints.register)}$resourceParam" else null,
+                grantTypesSupported = listOf(GrantType.AuthorizationCode),
+                responseTypesSupported = listOf(ResponseType.Code),
                 tokenEndpointAuthMethodsSupported = listOf(
+                    TokenEndpointAuthMethod.None,
                     TokenEndpointAuthMethod.ClientSecretPost,
                     TokenEndpointAuthMethod.ClientSecretBasic
                 ),

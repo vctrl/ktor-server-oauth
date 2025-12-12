@@ -1,13 +1,12 @@
 package com.vcontrol.ktor.oauth.route
 
-import com.vcontrol.ktor.oauth.OAuthDsl
+import com.vcontrol.ktor.oauth.model.ClientIdentity
 import com.vcontrol.ktor.oauth.model.ProvisionSession
 import com.vcontrol.ktor.oauth.token.ClaimsBuilder
 import com.vcontrol.ktor.oauth.token.ProvisionClaims
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
-import io.ktor.server.routing.*
 import io.ktor.server.sessions.*
 import io.ktor.util.*
 
@@ -23,19 +22,20 @@ internal val ProvisionCompletedKey = AttributeKey<Boolean>("ProvisionCompleted")
 /**
  * Context for provision route handlers.
  *
- * Provides provision-specific functionality on top of [RoutingContext]:
- * - [call]: The application call (delegated from RoutingContext)
- * - [clientId]: The client ID from the provision session
+ * Provides provision-specific functionality:
+ * - [client]: The client identity (includes clientId and optionally clientName)
  * - [complete]: Signal provision completion with optional claims
  *
- * Example:
+ * Access via [ApplicationCall.provision] extension:
  * ```kotlin
  * provision {
  *     post {
  *         val params = call.receiveParameters()
  *         if (params["password"] == "letmein") {
  *             call.sessions.set(MySession(apiKey = params["api_key"]))
- *             complete(claims = mapOf("username" to params["username"]))
+ *             call.provision.complete {
+ *                 withClaim("username", params["username"])
+ *             }
  *         } else {
  *             call.respondText("Invalid password")
  *         }
@@ -43,17 +43,12 @@ internal val ProvisionCompletedKey = AttributeKey<Boolean>("ProvisionCompleted")
  * }
  * ```
  */
-class ProvisionRoutingContext(
-    private val underlying: RoutingContext,
-    internal val session: ProvisionSession
+class ProvisionContext(
+    private val call: ApplicationCall,
+    private val session: ProvisionSession
 ) {
-    /** The application call */
-    val call: ApplicationCall get() = underlying.call
-
-    /**
-     * The client ID for this provision session.
-     */
-    val clientId: String get() = session.clientId
+    /** The full client identity for this provision session */
+    val client: ClientIdentity get() = session.identity.client
 
     /**
      * Complete the provision flow and redirect back to authorization.
@@ -72,11 +67,13 @@ class ProvisionRoutingContext(
      * ```
      */
     suspend fun complete(builder: ClaimsBuilder.() -> Unit = {}) {
-        val claimsBuilder = ClaimsBuilder().apply(builder)
-        val newClaims = ProvisionClaims.from(claimsBuilder.build())
+        val newClaims = ClaimsBuilder().apply(builder).build()
 
         // Merge with existing claims
-        val mergedClaims = ProvisionClaims(session.claims.values + newClaims.values)
+        val mergedClaims = ProvisionClaims(
+            plain = session.claims.plain + newClaims.plain,
+            encrypted = session.claims.encrypted + newClaims.encrypted
+        )
         val updatedSession = session.copy(claims = mergedClaims)
 
         // Save session
@@ -110,102 +107,39 @@ class ProvisionRoutingContext(
 }
 
 // ============================================================================
-// Provision Route DSL
+// ApplicationCall Extension
 // ============================================================================
 
 /**
- * Type alias for provision handler with [ProvisionRoutingContext] receiver.
- */
-typealias ProvisionHandler = suspend ProvisionRoutingContext.() -> Unit
-
-/**
- * Builder for provision routes with [ProvisionRoutingContext] handlers.
+ * Access the provision context for this call.
  *
- * Wraps Ktor's Route with provision-aware handlers that provide
- * access to [ProvisionRoutingContext.complete] and [ProvisionRoutingContext.clientId].
+ * Provides access to:
+ * - [ProvisionContext.client] - The client identity (clientId and optionally clientName)
+ * - [ProvisionContext.complete] - Complete the provision flow with optional claims
+ *
+ * Example:
+ * ```kotlin
+ * provision {
+ *     get {
+ *         val clientId = call.provision.client.clientId
+ *         call.respondText(formHtml, ContentType.Text.Html)
+ *     }
+ *     post {
+ *         val params = call.receiveParameters()
+ *         call.sessions.set(MySession(apiKey = params["api_key"]))
+ *         call.provision.complete {
+ *             withClaim("username", params["username"])
+ *         }
+ *     }
+ * }
+ * ```
+ *
+ * @throws IllegalStateException if called outside a provision route
  */
-@OAuthDsl
-class ProvisionRouteBuilder(internal val route: Route) {
-
-    /**
-     * Handle GET requests.
-     *
-     * Example:
-     * ```kotlin
-     * provision {
-     *     get {
-     *         call.respondText(formHtml, ContentType.Text.Html)
-     *     }
-     * }
-     * ```
-     */
-    fun get(handler: ProvisionHandler) {
-        route.get { wrapHandler(handler) }
+val ApplicationCall.provision: ProvisionContext
+    get() {
+        val session = attributes.getOrNull(ProvisionSessionKey)
+            ?: error("Not in a provision context. This is only available within provision { } routes.")
+        return ProvisionContext(this, session)
     }
-
-    /**
-     * Handle POST requests.
-     *
-     * Example:
-     * ```kotlin
-     * provision {
-     *     post {
-     *         val params = call.receiveParameters()
-     *         complete(claims = mapOf("username" to params["username"]))
-     *     }
-     * }
-     * ```
-     */
-    fun post(handler: ProvisionHandler) {
-        route.post { wrapHandler(handler) }
-    }
-
-    /**
-     * Handle all HTTP methods.
-     *
-     * Example:
-     * ```kotlin
-     * provision {
-     *     handle {
-     *         complete()  // Auto-complete without claims
-     *     }
-     * }
-     * ```
-     */
-    fun handle(handler: ProvisionHandler) {
-        route.handle { wrapHandler(handler) }
-    }
-
-    /**
-     * Handle PUT requests.
-     */
-    fun put(handler: ProvisionHandler) {
-        route.put { wrapHandler(handler) }
-    }
-
-    /**
-     * Handle DELETE requests.
-     */
-    fun delete(handler: ProvisionHandler) {
-        route.delete { wrapHandler(handler) }
-    }
-
-    /**
-     * Handle PATCH requests.
-     */
-    fun patch(handler: ProvisionHandler) {
-        route.patch { wrapHandler(handler) }
-    }
-
-    /**
-     * Wrap the handler with ProvisionRoutingContext.
-     */
-    private suspend fun RoutingContext.wrapHandler(handler: ProvisionHandler) {
-        val session = call.attributes.getOrNull(ProvisionSessionKey)
-            ?: error("Provision handler called without provision session")
-
-        val provisionContext = ProvisionRoutingContext(this, session)
-        handler(provisionContext)
-    }
-}
 

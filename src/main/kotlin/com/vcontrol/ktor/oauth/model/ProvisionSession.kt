@@ -10,7 +10,7 @@ import kotlinx.serialization.Serializable
  * to redirect back after provision completes.
  *
  * Contains [identity] which holds the immutable authorization context
- * (clientId, jti, providerName) that flows through to the final JWT.
+ * (jti, providerName, client) that flows through to the final JWT.
  *
  * Provision is where the resource server collects credentials, API keys, and
  * other configuration needed to serve the client. This is distinct from
@@ -29,10 +29,6 @@ data class ProvisionSession(
      */
     val claims: ProvisionClaims = ProvisionClaims()
 ) {
-    /** Client identifier - delegated from identity */
-    val clientId: String get() = identity.clientId
     /** JWT ID - delegated from identity */
     val jti: String get() = identity.jti
-    /** Provider name - delegated from identity */
-    val providerName: String? get() = identity.providerName
 }

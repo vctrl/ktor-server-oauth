@@ -60,7 +60,7 @@ Many applications need user-provided configuration that OAuth alone can't handle
 
 ```kotlin
 dependencies {
-    implementation("com.vcontrol:ktor-server-oauth:0.4.10")
+    implementation("com.vcontrol:ktor-server-oauth:0.5.0")
 }
 ```
 
@@ -76,8 +76,10 @@ import io.ktor.server.routing.*
 fun Application.module() {
     // 1. Install OAuth plugin with local authorization server
     install(OAuth) {
-        authorizationServer(LocalAuthServer) {
-            openRegistration = true
+        server {
+            clients {
+                registration = true  // Accept all registrations
+            }
         }
     }
 
@@ -131,24 +133,71 @@ The plugin automatically configures these endpoints:
 | `GET /.well-known/oauth-authorization-server` | Authorization server metadata |
 | `GET /.well-known/oauth-protected-resource` | Protected resource metadata |
 
+## Error Responses
+
+All error responses follow [RFC 6749 Section 5.2](https://datatracker.ietf.org/doc/html/rfc6749#section-5.2):
+
+```json
+{
+  "error": "invalid_grant",
+  "error_description": "Invalid or expired authorization code"
+}
+```
+
+| Error Code | HTTP Status | When |
+|------------|-------------|------|
+| `invalid_request` | 400 | Missing or malformed parameters |
+| `invalid_client` | 401 | Bad client_id or client_secret |
+| `invalid_grant` | 400 | Expired/invalid auth code, PKCE failure, redirect_uri mismatch |
+| `unsupported_grant_type` | 400 | Grant type not enabled |
+
+For `invalid_client`, the response includes a `WWW-Authenticate: Bearer` header per RFC 6750.
+
+Protected routes (behind `authenticate { }`) return `401 Unauthorized` with `WWW-Authenticate: Bearer` for missing/invalid/expired tokens - this is standard Ktor JWT authentication behavior.
+
+## Defaults
+
+| Setting | Default | Notes                                  |
+|---------|---------|----------------------------------------|
+| Token expiration | 90 days | JWT `exp` claim                        |
+| Session TTL | 90 days | Matches token lifetime                 |
+| Session storage | File-based | `~/.ktor-oauth/sessions/`              |
+| Session encryption | Enabled | AES-256-GCM with per-client key in JWT |
+| Session cleanup | Enabled, 1 hour | Removes expired session files          |
+| Route prefix | `/.oauth` | All internal endpoints under this path |
+| Auth code storage | In-memory | Lost on restart (stateless by design)  |
+
+**Security notes:**
+- JWT signing key is auto-generated and stored at `~/.ktor-oauth/jwt.secret`
+- Session encryption keys are embedded in each JWT token, so sessions can only be decrypted by the token holder
+- Without cleanup, session files accumulate on disk (one file per session per type)
+
 ## Configuration
 
 ### Plugin Configuration
 
 ```kotlin
 install(OAuth) {
-    authorizationServer(LocalAuthServer) {
-        // Enable/disable dynamic client registration
-        openRegistration = true
+    server {
+        // Client validation
+        clients {
+            // Dynamic registration (RFC 7591)
+            // Has access to: origin, headers, resource, request
+            registration = true  // or:
+            // registration { clientId, clientName ->
+            //     origin.remoteHost in allowedIps
+            // }
+
+            // Client credentials grant
+            // Has access to: origin, headers, resource, request
+            credentials { clientId, secret ->
+                origin.remoteHost !in blockedIps && db.check(clientId, secret)
+            }
+            // Or static: credentials("app" to "secret", "app2" to "secret2")
+        }
 
         // Token lifetime
         tokenExpiration = 90.days
-
-        // Global client blocklist
-        client { clientId -> clientId !in blockedClients }
-
-        // Client credentials grant validation
-        clientCredentials { id, secret -> validateCredentials(id, secret) }
 
         // Custom JWT claims
         claims(SessionKeyClaimsProvider)
@@ -223,8 +272,46 @@ Or via application.conf:
 oauth.sessions.cleanup.interval = "PT1H"
 ```
 
-Cleanup is disabled by default. The job runs on the configured interval and properly
-shuts down when the application stops.
+Cleanup is enabled by default (1 hour interval). The job runs on the configured interval
+and properly shuts down when the application stops.
+
+### Relationship with Ktor Sessions
+
+`OAuthSessions` internally installs Ktor's `Sessions` plugin - do not install both.
+
+```kotlin
+// ✅ Correct - OAuthSessions manages Sessions internally
+install(OAuthSessions) {
+    session<MySession>()
+}
+
+// ❌ Wrong - will conflict
+install(Sessions) { ... }  // Don't do this
+install(OAuthSessions) { ... }
+```
+
+**What OAuthSessions provides:**
+
+- Bearer-bound sessions (`session<T>()`) - stored server-side, keyed by JWT claims
+- Standard Ktor sessions (`cookie<T>()`, `header<T>()`) - available through the same DSL
+- Internal OAuth cookies (auth_request, provision_session)
+
+**Mixing session types:**
+
+```kotlin
+install(OAuthSessions) {
+    // Bearer-bound session (server-side, keyed by JWT)
+    session<UserPreferences>()
+
+    // Standard Ktor cookie session (for non-OAuth flows)
+    cookie<AdminSession>("admin_session") {
+        cookie.httpOnly = true
+        cookie.secure = true
+    }
+}
+```
+
+Both session types use `call.sessions.get<T>()` / `call.sessions.set<T>()` - the transport is determined by how they're registered.
 
 ### application.conf
 

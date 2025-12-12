@@ -5,6 +5,7 @@ import com.vcontrol.ktor.oauth.oauth
 import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
 import com.vcontrol.ktor.oauth.model.AuthorizationRequest
 import com.vcontrol.ktor.oauth.model.AuthorizationResult
+import com.vcontrol.ktor.oauth.model.ClientIdentity
 import com.vcontrol.ktor.oauth.model.CodeChallengeMethod
 import com.vcontrol.ktor.oauth.model.OAuthError
 import com.vcontrol.ktor.oauth.model.ResponseType
@@ -82,26 +83,40 @@ fun Routing.configureAuthorizationRoutes() {
 
                 logger.debug { "Resolved provider: resource=$resourceParam -> provider=$providerName (registered: ${registry.authProviders.keys})" }
 
+                // Validate required parameters per RFC 6749 Section 4.1.1
+                val clientId = params["client_id"]
+                    ?: throw IllegalArgumentException("client_id is required")
+                val redirectUri = params["redirect_uri"]
+                    ?: throw IllegalArgumentException("redirect_uri is required")
+                val codeChallenge = params["code_challenge"]
+                    ?: throw IllegalArgumentException("code_challenge is required")
+
                 request = AuthorizationRequest(
                     responseType = parseResponseType(params["response_type"]),
-                    clientId = params["client_id"] ?: "",
-                    redirectUri = params["redirect_uri"] ?: "",
-                    codeChallenge = params["code_challenge"] ?: "",
+                    clientId = clientId,
+                    redirectUri = redirectUri,
+                    codeChallenge = codeChallenge,
                     codeChallengeMethod = parseCodeChallengeMethod(params["code_challenge_method"]),
                     state = params["state"],
                     scope = params["scope"],
                     providerName = providerName
                 )
 
-                // Generate jti upfront using configured provider or UUID default
-                val jwtIdProvider = registry.localAuthServer?.jwtIdProvider
-                val jti = jwtIdProvider?.invoke(request.clientId) ?: UUID.randomUUID().toString()
+                // Generate jti upfront - always UUID for authorization_code flow
+                val jti = UUID.randomUUID().toString()
+
+                // Get optional client_name from query param (for open registration)
+                val clientName = params["client_name"]
 
                 // Create immutable identity context for this authorization flow
+                // Use Dynamic client type (authorization_code flow via dynamic registration)
                 identity = AuthorizationIdentity(
-                    clientId = request.clientId,
                     jti = jti,
-                    providerName = providerName
+                    providerName = providerName,
+                    client = ClientIdentity.Dynamic(
+                        clientId = request.clientId,
+                        clientName = clientName
+                    )
                 )
 
                 claims = ProvisionClaims()
@@ -131,7 +146,7 @@ fun Routing.configureAuthorizationRoutes() {
             // Pass identity and claims for auth code storage
             handleAuthorizationResult(
                 authProvider.processAuthorization(request, identity, claims),
-                identity.clientId
+                identity.client.clientId
             )
 
         } catch (e: Exception) {

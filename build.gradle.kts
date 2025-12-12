@@ -1,7 +1,7 @@
 plugins {
     id("buildsrc.convention.kotlin-jvm")
     `java-library`
-    alias(libs.plugins.kotlinPluginSerialization)
+    alias(libs.plugins.kotlin.plugin.serialization)
     id("com.vanniktech.maven.publish") version "0.30.0"
 }
 
@@ -11,38 +11,41 @@ version = file("version.properties")
 
 dependencies {
     // Ktor BOM for version alignment
-    api(platform(libs.ktorBom))
+    api(platform(libs.ktor.bom))
 
     // Coroutines
-    implementation(libs.kotlinxCoroutines)
+    implementation(libs.kotlinx.coroutines)
 
     // Kotlin serialization
-    implementation(libs.kotlinxSerialization)
+    implementation(libs.kotlinx.serialization)
 
     // Ktor server
-    implementation(libs.ktorServerCore)
-    api(libs.ktorServerAuth)
-    api(libs.ktorServerAuthJwt)
-    implementation(libs.ktorServerContentNegotiation)
-    implementation(libs.ktorSerializationJson)
-    implementation(libs.ktorServerStatusPages)
-    implementation(libs.ktorServerForwardedHeader)
-    api(libs.ktorServerSessions)
+    implementation(libs.ktor.server.core)
+    api(libs.ktor.server.auth)
+    api(libs.ktor.server.auth.jwt)
+    implementation(libs.ktor.server.content.negotiation)
+    implementation(libs.ktor.serialization.json)
+    implementation(libs.ktor.server.status.pages)
+    implementation(libs.ktor.server.forwarded.header)
+    api(libs.ktor.server.sessions)
+
+    // Bearer sessions (shared session storage infrastructure)
+    api("com.vcontrol:ktor-bearer-sessions:0.2.0")
 
     // JWT
-    implementation(libs.javaJwt)
+    implementation(libs.java.jwt)
 
     // Logging
-    api(libs.kotlinLogging)
+    api(libs.kotlin.logging)
 
     // Test dependencies
     testImplementation(kotlin("test"))
-    testImplementation(libs.kotlinxCoroutines)
-    testImplementation(libs.ktorServerTests)
-    testImplementation(libs.ktorServerCio)
-    testImplementation(libs.ktorClientContentNegotiation)
-    testImplementation(libs.ktorSerializationJson)
-    testImplementation(libs.slf4jSimple)
+    testImplementation(libs.kotlinx.coroutines)
+    testImplementation(libs.ktor.server.tests)
+    testImplementation(libs.ktor.server.cio)
+    testImplementation(libs.ktor.client.content.negotiation)
+    testImplementation(libs.ktor.serialization.json)
+    testImplementation(libs.slf4j.simple)
 }
 
 // Generate version file for runtime access

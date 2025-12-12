@@ -1,30 +1,104 @@
 package com.vcontrol.ktor.oauth
 
-import com.vcontrol.ktor.oauth.route.ProvisionRouteBuilder
+import com.vcontrol.ktor.oauth.model.TokenRequest
+import io.ktor.http.Headers
+import io.ktor.http.RequestConnectionPoint
+import io.ktor.server.plugins.origin
+import io.ktor.server.request.ApplicationRequest
+import io.ktor.server.routing.Route
 import io.ktor.server.sessions.CookieConfiguration
 
 // ============================================================================
-// Type Aliases for Validation and Principal Factory
+// Request Context for Client Validation
 // ============================================================================
 
 /**
- * Type alias for client_credentials validation function.
- * Takes clientId and clientSecret, returns true if valid.
+ * Context for client validation providing request and resource information.
+ *
+ * Used as receiver for [RegistrationValidator] and [CredentialsValidator].
+ *
+ * Provides access to:
+ * - [request] - The full [ApplicationRequest] for IP, headers, etc.
+ * - [resource] - The auth provider/resource name (null for default)
+ * - [origin] - Convenience accessor for request origin (remote host, port, etc.)
+ * - [headers] - Convenience accessor for request headers
+ *
+ * Example:
+ * ```kotlin
+ * server {
+ *     clients {
+ *         registration { clientId, clientName ->
+ *             origin.remoteHost in allowedIps
+ *         }
+ *         credentials { clientId, secret ->
+ *             origin.remoteHost !in blockedIps && db.check(clientId, secret)
+ *         }
+ *     }
+ * }
+ * ```
  */
-typealias CredentialValidator = (clientId: String, clientSecret: String) -> Boolean
+class RequestContext(
+    val request: ApplicationRequest,
+    val resource: String?
+) {
+    /** Request origin (remote host, port, etc.) */
+    val origin: RequestConnectionPoint get() = request.origin
+
+    /** Request headers */
+    val headers: Headers get() = request.headers
+}
+
+// ============================================================================
+// Type Aliases for Validation
+// ============================================================================
 
 /**
- * Type alias for client ID validation function (global blocklist).
- * Called after JWT is validated. Return true to allow, false to reject.
+ * Type alias for registration validation function.
+ * Called during dynamic client registration (RFC 7591).
+ *
+ * Dynamic registration always produces **public clients** (no client_secret).
+ * Public clients authenticate via PKCE at /token.
+ *
+ * Receives clientName (from request) with [RequestContext] as receiver.
+ * Return true to allow, false to reject.
  */
-typealias ClientValidator = suspend (clientId: String) -> Boolean
+typealias RegistrationValidator = suspend RequestContext.(clientName: String?) -> Boolean
+
+/**
+ * Type alias for credentials validation function.
+ * Called at /token to validate **confidential clients** (RFC 6749 Section 2.3).
+ *
+ * Used for pre-configured clients with shared secrets. These clients skip
+ * dynamic registration - they already have client_id and client_secret.
+ *
+ * Receives clientId, secret as parameters with [RequestContext] as receiver.
+ * Return true to allow, false to reject.
+ *
+ * Example:
+ * ```kotlin
+ * credentials { clientId, secret ->
+ *     clientId == "my-app" && secret == "my-secret"
+ * }
+ * ```
+ */
+typealias CredentialsValidator = suspend RequestContext.(clientId: String, secret: String?) -> Boolean
 
 /**
  * Type alias for JWT ID (jti) generation function.
- * Called at the start of each authorization flow to generate a unique token ID.
- * Takes clientId and returns a unique jti string.
+ * Called during token issuance to generate a unique token ID.
+ * Receives the full [TokenRequest] for context-aware jti generation.
+ *
+ * Example:
+ * ```kotlin
+ * jwtId { request ->
+ *     when (request) {
+ *         is TokenRequest.AuthorizationCodeGrant -> UUID.randomUUID().toString()
+ *         is TokenRequest.RefreshTokenGrant -> UUID.randomUUID().toString()
+ *     }
+ * }
+ * ```
  */
-typealias JwtIdProvider = (clientId: String) -> String
+typealias JwtIdProvider = (request: TokenRequest) -> String
 
 /**
  * Type alias for auth provider validation function (like Ktor's validate {}).
@@ -35,12 +109,11 @@ typealias AuthProviderValidator = suspend io.ktor.server.auth.jwt.JWTCredential.
 
 /**
  * Type alias for provision route setup.
- * Receives [ProvisionRouteBuilder] for defining handlers with [ProvisionRoutingContext].
+ * Uses native Ktor [Route] DSL with access to provision context via [ApplicationCall.provision].
  *
- * Handlers have access to:
- * - [ProvisionRoutingContext.call] - The application call (from RoutingContext)
- * - [ProvisionRoutingContext.clientId] - The client ID for this session
- * - [ProvisionRoutingContext.complete] - Complete provision with optional claims
+ * Access provision context in handlers via `call.provision`:
+ * - [ProvisionContext.client] - The client identity (clientId and optionally clientName)
+ * - [ProvisionContext.complete] - Complete provision with optional claims
  *
  * Example:
  * ```kotlin
@@ -49,12 +122,14 @@ typealias AuthProviderValidator = suspend io.ktor.server.auth.jwt.JWTCredential.
  *     post {
  *         val params = call.receiveParameters()
  *         call.sessions.set(MySession(apiKey = params["api_key"]))
- *         complete(claims = mapOf("username" to params["username"]))
+ *         call.provision.complete {
+ *             withClaim("username", params["username"])
+ *         }
  *     }
  * }
  * ```
  */
-typealias ProvisionRouteSetup = ProvisionRouteBuilder.() -> Unit
+typealias ProvisionRouteSetup = Route.() -> Unit
 
 // ============================================================================
 // Internal Provider Configuration
@@ -75,8 +150,8 @@ class ProviderConfig internal constructor(val name: String?) {
     /** JWT realm for WWW-Authenticate header (like Ktor's basic/jwt realm) */
     var realm: String = "oauth-server"
 
-    /** Which authorization server to use (null = default/local) */
-    var authorizationServer: String? = null
+    /** Which server to use (null = default/local) */
+    var server: String? = null
 
     /** Provision configuration */
     internal var provisionConfig: ProvisionConfig? = null
@@ -85,16 +160,18 @@ class ProviderConfig internal constructor(val name: String?) {
     internal var validateFn: AuthProviderValidator? = null
 
     /**
-     * Configure the provision flow with [ProvisionRoutingContext] handlers.
+     * Configure the provision flow using native Ktor routing DSL.
      *
-     * Example:
+     * Access provision context via `call.provision`:
      * ```kotlin
      * provision {
      *     get { call.respondText(formHtml, ContentType.Text.Html) }
      *     post {
      *         val params = call.receiveParameters()
      *         call.sessions.set(MySession(apiKey = params["api_key"]))
-     *         complete(claims = mapOf("username" to params["username"]))
+     *         call.provision.complete {
+     *             withClaim("username", params["username"])
+     *         }
      *     }
      * }
      * ```
@@ -137,10 +214,9 @@ class ProviderConfig internal constructor(val name: String?) {
  * other configuration needed to serve the client. This is distinct from
  * RFC authorization consent - provision is resource-specific setup.
  *
- * Handlers receive [ProvisionRoutingContext] which provides:
- * - [ProvisionRoutingContext.call] - The application call
- * - [ProvisionRoutingContext.clientId] - The client ID for this session
- * - [ProvisionRoutingContext.complete] - Complete provision with optional claims
+ * Uses native Ktor routing DSL. Access provision context via `call.provision`:
+ * - [ProvisionContext.client] - The client identity (clientId and optionally clientName)
+ * - [ProvisionContext.complete] - Complete provision with optional claims
  *
  * Example:
  * ```kotlin
@@ -152,7 +228,9 @@ class ProviderConfig internal constructor(val name: String?) {
  *         val params = call.receiveParameters()
  *         if (params["password"] == "letmein") {
  *             call.sessions.set(MySession(apiKey = params["api_key"]))
- *             complete(claims = mapOf("username" to params["username"]))
+ *             call.provision.complete {
+ *                 withClaim("username", params["username"])
+ *             }
  *         } else {
  *             call.respondText("Invalid password", ContentType.Text.Html)
  *         }
@@ -184,10 +262,12 @@ class ProvisionConfig(
  * Example:
  * ```kotlin
  * install(OAuth) {
- *     authorizationServer(LocalAuthServer) {
- *         openRegistration = true
+ *     server {
+ *         clients {
+ *             registration = true
+ *             credentials { clientId, secret -> db.check(clientId, secret) }
+ *         }
  *         tokenExpiration = 90.days
- *         clientCredentials { id, secret -> validate(id, secret) }
  *     }
  * }
  *
@@ -205,7 +285,7 @@ class ProvisionConfig(
  *         post {
  *             val params = call.receiveParameters()
  *             call.sessions.set(MySession(apiKey = params["api_key"]))
- *             complete(claims = mapOf("username" to params["username"]))
+ *             call.provision.complete { withClaim("username", params["username"]) }
  *         }
  *     }
  *
@@ -222,42 +302,54 @@ class OAuthPluginConfig {
 
     /**
      * Configure a local authorization server (issues tokens).
-     * Only one local auth server can be configured.
+     * Only one local server can be configured.
      *
      * Example:
      * ```kotlin
-     * authorizationServer(LocalAuthServer) {
-     *     openRegistration = true
+     * server {
+     *     clients {
+     *         registration = true
+     *         credentials { clientId, secret -> db.check(clientId, secret) }
+     *     }
      *     tokenExpiration = 90.days
      *     claims(SessionKeyClaimsProvider)
      * }
      * ```
      */
-    fun <C : AuthServerConfig> authorizationServer(
+    fun server(block: LocalAuthServerConfig.() -> Unit) {
+        server(Local, block)
+    }
+
+    /**
+     * Configure a server with a specific builder.
+     * Use [Local] for local token issuance or [External] for external providers.
+     */
+    fun <C : AuthServerConfig> server(
         builder: AuthServerBuilder<C>,
         block: C.() -> Unit
     ) {
         val config = builder.createConfig(null)
         config.block()
         require(config !is LocalAuthServerConfig || authServers.values.none { it is LocalAuthServerConfig }) {
-            "Only one local authorization server can be configured"
+            "Only one local server can be configured"
         }
         authServers[config.name] = config
     }
 
     /**
-     * Configure a named authorization server.
-     * Use with ExternalAuthServer for external auth servers.
+     * Configure a named server.
      *
-     * Example:
+     * Note: [External] is not yet implemented - placeholder for future support.
+     *
+     * Example (future):
      * ```kotlin
-     * authorizationServer("partner", ExternalAuthServer) {
+     * server("partner", External) {
      *     jwksUri = "https://partner.example/.well-known/jwks.json"
      *     issuer = "https://partner.example"
      * }
      * ```
      */
-    fun <C : AuthServerConfig> authorizationServer(
+    fun <C : AuthServerConfig> server(
         name: String,
         builder: AuthServerBuilder<C>,
         block: C.() -> Unit
@@ -265,9 +357,9 @@ class OAuthPluginConfig {
         val config = builder.createConfig(name)
         config.block()
         require(config !is LocalAuthServerConfig || authServers.values.none { it is LocalAuthServerConfig }) {
-            "Only one local authorization server can be configured"
+            "Only one local server can be configured"
         }
-        require(name !in authServers) { "Authorization server '$name' already configured" }
+        require(name !in authServers) { "Server '$name' already configured" }
         authServers[name] = config
     }
 

@@ -8,8 +8,8 @@ import io.ktor.server.config.*
 /**
  * CLI tool for generating provision URLs for existing clients.
  *
- * Use this when a client already has credentials (e.g., via OAuth client_credentials)
- * but needs to complete provision to set up session data.
+ * Use this when a client already has a client_id but needs to complete
+ * provision to set up session data.
  *
  * Usage:
  *   ./gradlew :server:generateSetupUrl --args="--client-id <id>"

@@ -2,8 +2,12 @@ package com.vcontrol.ktor.oauth.config
 
 import com.vcontrol.ktor.oauth.*
 import com.vcontrol.ktor.oauth.model.AuthorizationRequest
-import com.vcontrol.ktor.oauth.session.SessionRecordStorage
-import com.vcontrol.ktor.oauth.session.bearerSession
+import com.vcontrol.ktor.sessions.BearerSessionRegistry
+import com.vcontrol.ktor.sessions.BearerSessionRegistryKey
+import com.vcontrol.ktor.sessions.DefaultSessionJson
+import com.vcontrol.ktor.sessions.SessionRecordStorage
+import com.vcontrol.ktor.sessions.DefaultSessionKeyResolver
+import com.vcontrol.ktor.sessions.bearerSession
 import com.vcontrol.ktor.oauth.session.configureProvisionSession
 import com.vcontrol.ktor.oauth.baseUrl
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -131,6 +135,13 @@ fun Application.configureOAuthSessions() {
         }
     }
 
+    // Create and register BearerSessionRegistry for direct session access (MCP, WebSocket, SSE)
+    val bearerRegistry = BearerSessionRegistry()
+    for (mapping in sessionTypeMappings) {
+        bearerRegistry.register(mapping.type, mapping.storage, DefaultSessionJson, mapping.ttl)
+    }
+    attributes.put(BearerSessionRegistryKey, bearerRegistry)
+
     // Get config from registry and application attributes
     val pluginConfig = oauthPluginConfig
     val crypto = this@configureOAuthSessions.crypto
@@ -159,8 +170,12 @@ fun Application.configureOAuthSessions() {
         configureProvisionSession(this@configureOAuthSessions)
 
         // 2. Register bearer token-bound session types
+        // Get the session key resolver from OAuth plugin (or use default)
+        val sessionKeyResolver = this@configureOAuthSessions.attributes.getOrNull(SessionKeyResolverKey)
+            ?: DefaultSessionKeyResolver
+
         for (mapping in sessionTypeMappings) {
-            bearerSession(mapping.type, mapping.storage, mapping.ttl)
+            bearerSession(mapping.type, mapping.storage, mapping.ttl, sessionKeyResolver = sessionKeyResolver)
         }
 
         // 3. Apply user's Ktor session configs (cookie<T>(), header<T>() from sessions { } block)

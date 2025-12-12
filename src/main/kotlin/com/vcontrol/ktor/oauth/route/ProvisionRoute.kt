@@ -2,8 +2,9 @@ package com.vcontrol.ktor.oauth.route
 
 import com.vcontrol.ktor.oauth.*
 import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
+import com.vcontrol.ktor.oauth.model.ClientIdentity
 import com.vcontrol.ktor.oauth.model.ProvisionSession
-import com.vcontrol.ktor.oauth.session.BearerSessionKeyAttributeKey
+import com.vcontrol.ktor.sessions.BearerSessionKeyAttributeKey
 import com.vcontrol.ktor.oauth.token.HmacToken
 import java.util.UUID
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -24,36 +25,45 @@ private const val STANDALONE_MARKER = "standalone://complete"
  * Use inside `routing { }` to configure the provision endpoint where clients
  * provide credentials, API keys, or other configuration during the OAuth flow.
  *
- * Handlers receive [ProvisionRoutingContext] which provides:
- * - [ProvisionRoutingContext.call] - The application call
- * - [ProvisionRoutingContext.clientId] - The client ID for this session
- * - [ProvisionRoutingContext.complete] - Complete provision with claims
+ * Uses native Ktor routing DSL. Access provision context via `call.provision`:
+ * - [ProvisionContext.client] - The client identity (clientId and optionally clientName)
+ * - [ProvisionContext.complete] - Complete provision with claims
  *
  * Example:
  * ```kotlin
  * routing {
  *     provision {
- *         get { call.respondText(formHtml, ContentType.Text.Html) }
+ *         get {
+ *             call.respondText(formHtml, ContentType.Text.Html)
+ *         }
  *         post {
+ *             val params = call.receiveParameters()
  *             call.sessions.set(MySession(apiKey = params["api_key"]))
- *             complete(claims = mapOf("username" to params["username"]))
+ *             call.provision.complete {
+ *                 withClaim("username", params["username"])
+ *             }
+ *         }
+ *
+ *         // Nested routes also work
+ *         route("/advanced") {
+ *             get { ... }
  *         }
  *     }
  *
  *     provision("calendar") {
- *         handle { complete(claims = mapOf("scope" to "calendar")) }
- *     }
- *
- *     authenticate {
- *         get("/api/data") { ... }
+ *         handle {
+ *             call.provision.complete {
+ *                 withClaim("scope", "calendar")
+ *             }
+ *         }
  *     }
  * }
  * ```
  *
  * @param providerName The OAuth provider name (null for default provider)
- * @param block Route builder for defining GET/POST/handle handlers
+ * @param block Ktor routing block for defining provision handlers
  */
-fun Route.provision(providerName: String? = null, block: ProvisionRouteBuilder.() -> Unit) {
+fun Route.provision(providerName: String? = null, block: Route.() -> Unit) {
     val app = application
     val registry = app.oauthOrNull
         ?: error("OAuth plugin must be installed before configuring provision routes")
@@ -74,7 +84,7 @@ fun Route.provision(providerName: String? = null, block: ProvisionRouteBuilder.(
     val newProvider = ProviderConfig(providerName).apply {
         if (existingProvider != null) {
             realm = existingProvider.realm
-            authorizationServer = existingProvider.authorizationServer
+            server = existingProvider.server
             validateFn = existingProvider.validateFn
         }
         provisionConfig = newProvisionConfig
@@ -119,15 +129,14 @@ fun Route.provision(providerName: String? = null, block: ProvisionRouteBuilder.(
                         }
 
                         // Create standalone session with generated jti
-                        // For standalone, also use jwtIdProvider if configured
-                        val jwtIdProvider = app.oauthOrNull?.localAuthServer?.jwtIdProvider
-                        val jti = jwtIdProvider?.invoke(clientIdParam) ?: UUID.randomUUID().toString()
+                        // Always UUID for standalone provision (no TokenRequest context)
+                        val jti = UUID.randomUUID().toString()
 
                         session = ProvisionSession(
                             identity = AuthorizationIdentity(
-                                clientId = clientIdParam,
                                 jti = jti,
-                                providerName = providerName
+                                providerName = providerName,
+                                client = ClientIdentity.Dynamic(clientIdParam)
                             ),
                             nextUrl = STANDALONE_MARKER
                         )
@@ -161,9 +170,8 @@ fun Route.provision(providerName: String? = null, block: ProvisionRouteBuilder.(
             }
         })
 
-        // Apply user's route setup using ProvisionRouteBuilder
-        val builder = ProvisionRouteBuilder(this)
-        block(builder)
+        // Apply user's route setup using native Ktor routing
+        block()
     }
 }
 
@@ -174,4 +182,4 @@ fun Route.provision(providerName: String? = null, block: ProvisionRouteBuilder.(
  *
  * @see provision
  */
-fun Route.provision(block: ProvisionRouteBuilder.() -> Unit) = provision(null, block)
+fun Route.provision(block: Route.() -> Unit) = provision(null, block)

@@ -2,16 +2,20 @@ package com.vcontrol.ktor.oauth
 
 import com.vcontrol.ktor.oauth.config.CleanupConfig
 import com.vcontrol.ktor.oauth.config.configureOAuthSessions
-import com.vcontrol.ktor.oauth.session.DefaultSessionJson
-import com.vcontrol.ktor.oauth.session.SessionRecordStorage
-import com.vcontrol.ktor.oauth.session.storage.FileStorageConfig
-import com.vcontrol.ktor.oauth.session.storage.InMemoryStorageConfig
-import com.vcontrol.ktor.oauth.session.storage.StorageConfig
+import com.vcontrol.ktor.sessions.DefaultSessionJson
+import com.vcontrol.ktor.sessions.SessionKeyResolver
+import com.vcontrol.ktor.sessions.SessionRecordStorage
+import com.vcontrol.ktor.sessions.storage.FileStorageConfig
+import com.vcontrol.ktor.sessions.storage.InMemoryStorageConfig
+import com.vcontrol.ktor.sessions.storage.StorageConfig
 import com.vcontrol.ktor.oauth.token.SessionKeyClaimsProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.events.*
 import io.ktor.server.application.*
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.principal
 import io.ktor.server.sessions.*
+import io.ktor.util.AttributeKey
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -235,9 +239,15 @@ object InMemorySessions : SessionStorageBuilder<InMemorySessionsConfig> {
 
 /**
  * Attribute key for storing the session key resolver function.
- * Used by BearerSessionTransport to resolve session keys from JWTs.
+ * Used when configuring bearer sessions to extract session keys from calls.
  */
-internal val SessionKeyResolverKey = io.ktor.util.AttributeKey<(com.auth0.jwt.interfaces.Payload) -> String?>("SessionKeyResolver")
+internal val SessionKeyResolverKey = io.ktor.util.AttributeKey<SessionKeyResolver>("SessionKeyResolver")
+
+/**
+ * Attribute key for storing the OAuthSessions plugin configuration.
+ * Used by authentication to resolve session keys from JWT payloads.
+ */
+internal val OAuthSessionsPluginConfigKey = io.ktor.util.AttributeKey<OAuthSessionsPluginConfig>("OAuthSessionsPluginConfig")
 
 /**
  * Holds a sessions block configuration: builder + config + session types.
@@ -534,7 +544,7 @@ class OAuthSessionsPluginConfig {
  * Example:
  * ```kotlin
  * install(OAuth) {
- *     authorizationServer(LocalAuthServer) { openRegistration = true }
+ *     server { clients { registration = true } }
  * }
  *
  * install(OAuthSessions) {
@@ -553,8 +563,16 @@ val OAuthSessions = createApplicationPlugin(name = "OAuth.Sessions", createConfi
     val registry = application.oauthOrNull
         ?: error("OAuthSessions requires OAuth plugin to be installed first. Use install(OAuth) before install(OAuthSessions).")
 
-    // Store the session key resolver for BearerSessionTransport to use
-    application.attributes.put(SessionKeyResolverKey, config::resolveSessionKey)
+    // Store plugin config for authentication to access
+    application.attributes.put(OAuthSessionsPluginConfigKey, config)
+
+    // Create a SessionKeyResolver that extracts from JWTPrincipal using OAuth config
+    val sessionKeyResolver: SessionKeyResolver = { call ->
+        call.principal<JWTPrincipal>()?.let { jwt ->
+            config.resolveSessionKey(jwt.payload)
+        }
+    }
+    application.attributes.put(SessionKeyResolverKey, sessionKeyResolver)
 
     // Build sessions blocks from config (reads defaults from application.conf)
     val sessionsBlocks = config.build(application.environment.config)

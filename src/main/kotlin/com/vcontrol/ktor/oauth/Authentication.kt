@@ -1,13 +1,12 @@
 package com.vcontrol.ktor.oauth
 
 import com.auth0.jwt.JWT
-import com.vcontrol.ktor.oauth.session.BearerSessionKeyAttributeKey
-import com.vcontrol.ktor.oauth.session.SessionKeyAttributeKey
+import com.vcontrol.ktor.sessions.BearerSessionKeyAttributeKey
+import com.vcontrol.ktor.sessions.EncryptionKeyAttributeKey
 import com.vcontrol.ktor.oauth.token.SessionKeyClaimsProvider
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
-import io.ktor.util.AttributeKey
 
 /**
  * Configure JWT authentication with OAuth defaults.
@@ -149,9 +148,6 @@ fun AuthenticationConfig.oauthJwt(
     // Register provider config for metadata lookup (serviceDocumentation, etc.)
     registry.registerJwtProviderConfig(providerConfig)
 
-    val authServer = registry.localAuthServer
-        ?: error("OAuth server not configured - use authorizationServer(LocalAuthServer) { } in install(OAuth)")
-
     val tokenIssuer = registry.getTokenIssuer()
         ?: error("Token issuer not configured")
 
@@ -167,25 +163,18 @@ fun AuthenticationConfig.oauthJwt(
         )
 
         validate { credential ->
-            val clientId = credential.payload.getClaim("client_id").asString()
-                ?: return@validate null
-
-            // 1. Global auth server client blocklist
-            authServer.clientValidator?.let { validator ->
-                if (!validator(clientId)) return@validate null
-            }
-
-            // Resolve session key using configured resolver or default to client_id
-            val sessionKeyResolver = application.attributes.getOrNull(SessionKeyResolverKey)
-            val sessionKey = sessionKeyResolver?.invoke(credential.payload) ?: clientId
+            // Resolve session key using OAuthSessions plugin config or default to jti
+            val pluginConfig = application.attributes.getOrNull(OAuthSessionsPluginConfigKey)
+            val sessionKey = pluginConfig?.resolveSessionKey(credential.payload)
+                ?: credential.payload.id  // jti claim - fallback
 
             // Set call attributes for session resolution
             request.call.attributes.put(BearerSessionKeyAttributeKey, sessionKey)
             credential.payload.getClaim(SessionKeyClaimsProvider.SESSION_KEY_CLAIM).asString()?.let { key ->
-                request.call.attributes.put(SessionKeyAttributeKey, key)
+                request.call.attributes.put(EncryptionKeyAttributeKey, key)
             }
 
-            // 2. Provider-level validate {} (like Ktor's validate { })
+            // Provider-level validate {} (like Ktor's validate { })
             providerConfig.validateFn?.invoke(credential)
                 ?: JWTPrincipal(credential.payload)
         }

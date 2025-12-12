@@ -1,6 +1,7 @@
 package com.vcontrol.ktor.oauth.route
 
 import com.vcontrol.ktor.oauth.oauth
+import com.vcontrol.ktor.oauth.RequestContext
 import com.vcontrol.ktor.oauth.model.*
 import com.vcontrol.ktor.oauth.token.TokenUtils
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -15,19 +16,21 @@ private val logger = KotlinLogging.logger {}
  * Configure OAuth Dynamic Client Registration endpoint
  * RFC 7591: https://datatracker.ietf.org/doc/html/rfc7591
  *
- * Controlled by authorizationServer { openRegistration = false } in OAuth DSL (default: true)
+ * Controlled by server { clients { registration = true } } in OAuth DSL.
+ * Default: No configuration = reject all registrations (secure by default).
  *
- * Note: Credentials are ephemeral - returned to client but not persisted.
- * Security is ensured by PKCE during the authorization flow.
+ * Returns clientId only (public client) unless token_endpoint_auth_method
+ * requests a secret (confidential client).
  */
 fun Routing.configureClientRegistrationRoutes() {
     val serverConfig = application.oauth.config.server
-    // Get openRegistration from local auth server config
     val localAuthServer = application.oauth.localAuthServer
-    val openRegistration = localAuthServer?.openRegistration ?: true
+    val clientsConfig = localAuthServer?.clientsConfig
+    val registrationValidator = clientsConfig?.registrationValidator
 
-    if (!openRegistration) {
-        logger.info { "Dynamic OAuth registration disabled (openRegistration=false)" }
+    // No registration configured = registration not enabled (secure by default)
+    if (registrationValidator == null) {
+        logger.info { "Dynamic OAuth registration disabled (no clients { registration = true } configured)" }
         return
     }
 
@@ -36,28 +39,44 @@ fun Routing.configureClientRegistrationRoutes() {
         try {
             val request = call.receive<ClientRegistrationRequest>()
 
-            // Generate client credentials (ephemeral - not persisted)
+            // Generate client ID
             val clientId = TokenUtils.generateClientId()
-            val clientSecret = TokenUtils.generateClientSecret()
+
+            // Get resource from query param (RFC 8707)
+            val resource = call.request.queryParameters["resource"]
+
+            // Validate registration using the configured validator with request context
+            val context = RequestContext(call.request, resource)
+            if (!context.registrationValidator(request.clientName)) {
+                val error = OAuthError(
+                    error = OAuthError.UNAUTHORIZED_CLIENT,
+                    errorDescription = "Registration not allowed"
+                )
+                call.respond(HttpStatusCode.Forbidden, error)
+                return@post
+            }
+
             val issuedAt = System.currentTimeMillis() / 1000
 
-            // Return registration response
-            // Note: Client credentials are ephemeral. The client uses these for
-            // the OAuth authorization flow, but PKCE ensures security.
+            // Stateless mode: dynamic registration always produces public clients
+            // Confidential clients must use pre-configured credentials via credentials { }
+            val authMethod = TokenEndpointAuthMethod.None
+            val clientSecret: String? = null
+
             val response = ClientRegistrationResponse(
                 clientId = clientId,
                 clientSecret = clientSecret,
                 clientIdIssuedAt = issuedAt,
-                clientSecretExpiresAt = 0, // No expiration
+                clientSecretExpiresAt = if (clientSecret != null) 0 else null,
                 clientName = request.clientName,
                 clientUri = request.clientUri,
                 redirectUris = request.redirectUris,
                 grantTypes = request.grantTypes ?: listOf(GrantType.AuthorizationCode),
                 responseTypes = request.responseTypes ?: listOf(ResponseType.Code),
-                tokenEndpointAuthMethod = request.tokenEndpointAuthMethod ?: TokenEndpointAuthMethod.None
+                tokenEndpointAuthMethod = authMethod
             )
 
-            logger.trace { "Generated ephemeral OAuth client: ${clientId.take(8)}..." }
+            logger.trace { "Generated OAuth client: ${clientId.take(8)}... (public=${clientSecret == null})" }
 
             call.respond(HttpStatusCode.Created, response)
 

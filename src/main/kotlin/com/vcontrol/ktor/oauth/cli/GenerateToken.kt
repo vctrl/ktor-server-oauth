@@ -1,6 +1,8 @@
 package com.vcontrol.ktor.oauth.cli
 
 import com.vcontrol.ktor.oauth.CryptoContext
+import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
+import com.vcontrol.ktor.oauth.model.ClientIdentity
 import com.vcontrol.ktor.oauth.token.JwtTokenIssuer
 import com.vcontrol.ktor.oauth.token.HmacToken
 import com.vcontrol.ktor.oauth.token.TokenUtils
@@ -73,8 +75,14 @@ fun main(args: Array<String>) {
     val crypto = CryptoContext(secretFile)
     val tokenIssuer = JwtTokenIssuer(crypto = crypto)
     val finalClientId = clientId ?: TokenUtils.generateClientId()
-    val jti = UUID.randomUUID().toString()
-    val token = tokenIssuer.createAccessToken(finalClientId, jti, clientName, expiration)
+
+    // Create identity for CLI-generated token (Dynamic with clientName)
+    val identity = AuthorizationIdentity(
+        jti = UUID.randomUUID().toString(),
+        providerName = null,
+        client = ClientIdentity.Dynamic(finalClientId, clientName)
+    )
+    val token = tokenIssuer.createAccessToken(identity, expiration)
     val provisionToken = HmacToken.generate(finalClientId, crypto.jwtSecret)
 
     println("""

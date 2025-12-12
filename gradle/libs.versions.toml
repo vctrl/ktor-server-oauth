@@ -1,41 +1,41 @@
 [versions]
 kotlin = "2.2.20"
-kotlinxSerializationJSON = "1.8.1"
-kotlinxCoroutines = "1.10.2"
+kotlinx-serialization-json = "1.8.1"
+kotlinx-coroutines = "1.10.2"
 ktor = "3.3.0"
-kotlinLogging = "7.0.3"
-javaJwt = "4.4.0"
+kotlin-logging = "7.0.3"
+java-jwt = "4.4.0"
 slf4j = "2.0.16"
 
 [libraries]
-kotlinGradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
-kotlinxSerialization = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJSON" }
-kotlinxCoroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+kotlinx-serialization = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization-json" }
+kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 
 # Ktor BOM for version alignment
-ktorBom = { module = "io.ktor:ktor-bom", version.ref = "ktor" }
+ktor-bom = { module = "io.ktor:ktor-bom", version.ref = "ktor" }
 
 # Ktor Server
-ktorServerCore = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
-ktorServerCio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
-ktorServerAuth = { module = "io.ktor:ktor-server-auth", version.ref = "ktor" }
-ktorServerAuthJwt = { module = "io.ktor:ktor-server-auth-jwt", version.ref = "ktor" }
-ktorServerContentNegotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
-ktorSerializationJson = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
-ktorServerStatusPages = { module = "io.ktor:ktor-server-status-pages", version.ref = "ktor" }
-ktorServerForwardedHeader = { module = "io.ktor:ktor-server-forwarded-header", version.ref = "ktor" }
-ktorServerSessions = { module = "io.ktor:ktor-server-sessions", version.ref = "ktor" }
-ktorServerTests = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+ktor-server-auth = { module = "io.ktor:ktor-server-auth", version.ref = "ktor" }
+ktor-server-auth-jwt = { module = "io.ktor:ktor-server-auth-jwt", version.ref = "ktor" }
+ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
+ktor-serialization-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+ktor-server-status-pages = { module = "io.ktor:ktor-server-status-pages", version.ref = "ktor" }
+ktor-server-forwarded-header = { module = "io.ktor:ktor-server-forwarded-header", version.ref = "ktor" }
+ktor-server-sessions = { module = "io.ktor:ktor-server-sessions", version.ref = "ktor" }
+ktor-server-tests = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 
 # Ktor Client (for tests)
-ktorClientContentNegotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
 
 # JWT
-javaJwt = { module = "com.auth0:java-jwt", version.ref = "javaJwt" }
+java-jwt = { module = "com.auth0:java-jwt", version.ref = "java-jwt" }
 
 # Logging
-slf4jSimple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
-kotlinLogging = { module = "io.github.oshai:kotlin-logging-jvm", version.ref = "kotlinLogging" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+kotlin-logging = { module = "io.github.oshai:kotlin-logging-jvm", version.ref = "kotlin-logging" }
 
 [plugins]
-kotlinPluginSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+kotlin-plugin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

@@ -3,7 +3,9 @@ package com.vcontrol.ktor.oauth.token
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.vcontrol.ktor.oauth.CryptoContext
-import com.vcontrol.ktor.oauth.session.SessionEncryption
+import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
+import com.vcontrol.ktor.oauth.model.ClientIdentity
+import com.vcontrol.ktor.sessions.AesGcmEncryption
 import java.util.*
 import kotlin.time.Duration
 
@@ -28,10 +30,15 @@ class JwtTokenIssuer(
         val DEFAULT_EXPIRATION: Duration = Duration.parse("90d")
     }
 
+    /**
+     * Create an access token from the authorization identity.
+     *
+     * @param identity The authorization identity containing client info and jti
+     * @param expiration Token expiration duration (Duration.ZERO = never expires)
+     * @param claims Additional claims from provision flow
+     */
     fun createAccessToken(
-        clientId: String,
-        jti: String,
-        clientName: String?,
+        identity: AuthorizationIdentity,
         expiration: Duration,
         claims: ProvisionClaims = ProvisionClaims()
     ): String {
@@ -39,10 +46,12 @@ class JwtTokenIssuer(
 
         val builder = JWT.create()
             .withIssuer(jwtIssuer)
-            .withJWTId(jti)
-            .withClaim("client_id", clientId)
-            .withClaim("client_name", clientName)
+            .withJWTId(identity.jti)
+            .withClaim("client_id", identity.client.clientId)
             .withIssuedAt(Date(now))
+
+        // Only add client_name if present (Dynamic clients only)
+        if (identity.client is ClientIdentity.Dynamic) builder.withClaim("client_name", identity.client.clientName)
 
         // ZERO = never expires (omit exp claim)
         if (expiration.isPositive()) {
@@ -50,20 +59,15 @@ class JwtTokenIssuer(
             builder.withExpiresAt(expiresAt)
         }
 
-        // Process claims - split into plain and encrypted
+        // Add provision claims
         if (!claims.isEmpty()) {
-            val (plainClaims, encryptedClaims) = claims.processForToken(crypto)
-
-            // Add plain claims
-            if (plainClaims.isNotEmpty()) {
-                builder.withPayload(plainClaims)
+            if (claims.plain.isNotEmpty()) {
+                builder.withPayload(claims.plain)
             }
-
-            // Add encrypted claims (encrypt with server key)
-            if (encryptedClaims.isNotEmpty()) {
+            if (claims.encrypted.isNotEmpty()) {
                 val encryptionKey = Base64.getUrlEncoder().withoutPadding().encodeToString(crypto.claimEncryptKey)
-                for ((key, value) in encryptedClaims) {
-                    builder.withClaim(key, SessionEncryption.encrypt(value, encryptionKey))
+                for ((key, value) in claims.encrypted) {
+                    builder.withClaim(key, AesGcmEncryption.encode(value, encryptionKey))
                 }
             }
         }
@@ -71,7 +75,7 @@ class JwtTokenIssuer(
         // Apply claims providers AFTER (can override provision claims)
         // This ensures session_key from SessionKeyClaimsProvider can't be tampered
         claimsProviders.forEach { provider ->
-            provider.addClaims(builder, clientId)
+            provider.addClaims(builder, identity.client.clientId)
         }
 
         return builder.sign(algorithm)

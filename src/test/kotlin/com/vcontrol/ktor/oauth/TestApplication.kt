@@ -20,8 +20,10 @@ import kotlinx.serialization.Serializable
 @Suppress("unused")
 fun Application.testModule() {
     install(OAuth) {
-        authorizationServer(LocalAuthServer) {
-            openRegistration = true
+        server {
+            clients {
+                registration = true  // Accept all registrations for testing
+            }
         }
     }
 
@@ -59,7 +61,7 @@ fun Application.testModule() {
                     }
                     else -> {
                         call.sessions.set(TestSession(username, password))
-                        complete {
+                        call.provision.complete {
                             withClaim("username", username)
                         }
                     }
@@ -69,7 +71,7 @@ fun Application.testModule() {
 
         provision("test") {
             handle {
-                complete {
+                call.provision.complete {
                     withClaim("test_claim", "working")
                 }
             }
@@ -77,7 +79,7 @@ fun Application.testModule() {
 
         provision("enc-claim-test") {
             handle {
-                complete {
+                call.provision.complete {
                     withEncryptedClaim("enc_claim", "my-secret-value")
                 }
             }

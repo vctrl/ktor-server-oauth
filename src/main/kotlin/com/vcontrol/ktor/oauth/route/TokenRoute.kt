@@ -2,16 +2,15 @@ package com.vcontrol.ktor.oauth.route
 
 import com.vcontrol.ktor.oauth.oauth
 import com.vcontrol.ktor.oauth.AuthCodeStorage
-import com.vcontrol.ktor.oauth.config.OAuthConfig
+import com.vcontrol.ktor.oauth.RequestContext
 import com.vcontrol.ktor.oauth.config.ServerConfig
 import com.vcontrol.ktor.oauth.model.CodeChallengeMethod
-import com.vcontrol.ktor.oauth.model.GrantType
+import com.vcontrol.ktor.oauth.model.AuthorizationIdentity
 import com.vcontrol.ktor.oauth.model.OAuthError
 import com.vcontrol.ktor.oauth.model.TokenRequest
 import com.vcontrol.ktor.oauth.model.TokenResponse
 import com.vcontrol.ktor.oauth.token.JwtTokenIssuer
 import com.vcontrol.ktor.oauth.token.ProvisionClaims
-import com.vcontrol.ktor.oauth.baseUrl
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -23,24 +22,24 @@ import kotlin.time.Duration
 
 /**
  * Configure OAuth Token endpoint
- * Supports client_credentials and authorization_code grant types
- * RFC 6749: https://datatracker.ietf.org/doc/html/rfc6749#section-4.4
+ * Supports authorization_code grant type with PKCE
+ * RFC 6749: https://datatracker.ietf.org/doc/html/rfc6749#section-4.1
+ * RFC 7636: https://datatracker.ietf.org/doc/html/rfc7636
  */
 fun Routing.configureTokenRoutes() {
     val oauthConfig = application.oauth.config
     val serverConfig = oauthConfig.server
     val authCodeStorage = application.oauth.authCodeStorage
 
-    // Token Endpoint (Client Credentials Grant & Authorization Code Grant)
+    // Token Endpoint (Authorization Code Grant)
     post(serverConfig.endpoint(serverConfig.endpoints.token)) {
         try {
             val request = call.receiveTokenRequest()
 
-            // Route to appropriate grant type handler
-            when (request.grantType) {
-                GrantType.ClientCredentials -> handleClientCredentialsGrant(request, serverConfig)
-                GrantType.AuthorizationCode -> handleAuthorizationCodeGrant(request, serverConfig, authCodeStorage)
-                GrantType.RefreshToken -> {
+            // Route to appropriate grant type handler using sealed class dispatch
+            when (request) {
+                is TokenRequest.AuthorizationCodeGrant -> handleAuthorizationCodeGrant(request, serverConfig, authCodeStorage)
+                is TokenRequest.RefreshTokenGrant -> {
                     val error = OAuthError(
                         error = OAuthError.UNSUPPORTED_GRANT_TYPE,
                         errorDescription = "refresh_token grant not yet supported"
@@ -60,51 +59,38 @@ fun Routing.configureTokenRoutes() {
 }
 
 /**
- * Receive token request from either form-urlencoded or JSON body
+ * Receive token request from form-urlencoded body and parse into sealed type.
  */
 private suspend fun ApplicationCall.receiveTokenRequest(): TokenRequest {
-    return try {
-        // Try form-urlencoded first (OAuth spec default)
-        val params = receiveParameters()
-        val grantTypeStr = params["grant_type"]
-            ?: throw IllegalArgumentException("grant_type is required")
-        TokenRequest(
-            grantType = parseGrantType(grantTypeStr),
-            // client_id is optional when PKCE is used (code_verifier authenticates the client)
-            clientId = params["client_id"],
-            clientName = params["client_name"],
-            clientSecret = params["client_secret"],
-            scope = params["scope"],
-            code = params["code"],
-            redirectUri = params["redirect_uri"],
-            codeVerifier = params["code_verifier"]
-        )
-    } catch (e: Exception) {
-        // Fall back to JSON body
-        receive<TokenRequest>()
-    }
-}
+    val params = receiveParameters()
+    val grantType = params["grant_type"]
+        ?: throw IllegalArgumentException("grant_type is required")
 
-/**
- * Parse grant_type string to GrantType enum
- */
-private fun parseGrantType(value: String): GrantType = when (value) {
-    "authorization_code" -> GrantType.AuthorizationCode
-    "client_credentials" -> GrantType.ClientCredentials
-    "refresh_token" -> GrantType.RefreshToken
-    else -> throw IllegalArgumentException("Unsupported grant_type: $value")
+    return when (grantType) {
+        "authorization_code" -> TokenRequest.AuthorizationCodeGrant(
+            code = params["code"] ?: throw IllegalArgumentException("code is required"),
+            redirectUri = params["redirect_uri"] ?: throw IllegalArgumentException("redirect_uri is required"),
+            codeVerifier = params["code_verifier"] ?: throw IllegalArgumentException("code_verifier is required"),
+            clientId = params["client_id"],  // Optional with PKCE
+            clientSecret = params["client_secret"],  // For confidential clients (RFC 6749 Section 2.3)
+            scope = params["scope"]
+        )
+        "refresh_token" -> TokenRequest.RefreshTokenGrant(
+            refreshToken = params["refresh_token"] ?: throw IllegalArgumentException("refresh_token is required"),
+            scope = params["scope"]
+        )
+        else -> throw IllegalArgumentException("Unsupported grant_type: $grantType")
+    }
 }
 
 private suspend fun RoutingContext.issueTokenResponse(
     tokenIssuer: JwtTokenIssuer,
-    clientId: String,
-    jti: String,
-    clientName: String?,
+    identity: AuthorizationIdentity,
     scope: String?,
     expiration: Duration = JwtTokenIssuer.DEFAULT_EXPIRATION,
     claims: ProvisionClaims = ProvisionClaims()
 ) {
-    val accessToken = tokenIssuer.createAccessToken(clientId, jti, clientName, expiration, claims)
+    val accessToken = tokenIssuer.createAccessToken(identity, expiration, claims)
     // expiresIn: 0 means never expires (per OAuth spec, omit if infinite)
     val expiresIn = if (expiration.isPositive()) expiration.inWholeSeconds else null
 
@@ -119,96 +105,19 @@ private suspend fun RoutingContext.issueTokenResponse(
 }
 
 /**
- * Handle client_credentials grant type.
- * Uses the DSL-configured validator.
- * Supports provider-specific validators via ?resource= query param (RFC 8707).
- */
-private suspend fun RoutingContext.handleClientCredentialsGrant(
-    request: TokenRequest,
-    serverConfig: ServerConfig
-) {
-    val clientId = request.clientId
-    val clientSecret = request.clientSecret
-
-    // Validate client credentials
-    if (clientId == null || clientSecret == null) {
-        val error = OAuthError(
-            error = OAuthError.INVALID_REQUEST,
-            errorDescription = "client_id and client_secret are required"
-        )
-        call.respond(HttpStatusCode.BadRequest, error)
-        return
-    }
-
-    // Get provider from ?resource= query param (RFC 8707)
-    val registry = call.application.oauth
-
-    // Get validator from local auth server configuration
-    val localAuthServer = registry.localAuthServer
-    val validator = localAuthServer?.clientCredentialsValidator
-    if (validator == null) {
-        val error = OAuthError(
-            error = OAuthError.UNSUPPORTED_GRANT_TYPE,
-            errorDescription = "client_credentials grant not configured. Use clientCredentials { } in authorizationServer { } DSL."
-        )
-        call.respond(HttpStatusCode.BadRequest, error)
-        return
-    }
-
-    // Check credentials using DSL-configured validator
-    if (!validator(clientId, clientSecret)) {
-        val error = OAuthError(
-            error = OAuthError.INVALID_CLIENT,
-            errorDescription = "Invalid client credentials"
-        )
-        call.response.header("WWW-Authenticate", "Bearer realm=\"${call.baseUrl}\"")
-        call.respond(HttpStatusCode.Unauthorized, error)
-        return
-    }
-
-    // Get token issuer
-    val tokenIssuer = registry.getTokenIssuer()
-        ?: error("Token issuer not configured")
-
-    // Generate jti for client_credentials grant (using provider or UUID default)
-    val jwtIdProvider = localAuthServer.jwtIdProvider
-    val jti = jwtIdProvider?.invoke(clientId) ?: UUID.randomUUID().toString()
-
-    // Use auth server's token expiration if configured, else default from config
-    val expiration = localAuthServer.tokenExpiration ?: serverConfig.tokenExpiration
-    issueTokenResponse(tokenIssuer, clientId, jti, request.clientName, request.scope, expiration)
-}
-
-/**
  * Handle authorization_code grant type with PKCE.
  * Uses provider context from the stored auth code for token configuration.
  *
  * Note: client_id is optional when PKCE is used. Per RFC 7636, the code_verifier
  * proves the caller is the same party that initiated the authorization request.
- * Claude Code CLI omits client_id and sends 'resource' (RFC 8707) instead.
  */
 private suspend fun RoutingContext.handleAuthorizationCodeGrant(
-    request: TokenRequest,
+    request: TokenRequest.AuthorizationCodeGrant,
     serverConfig: ServerConfig,
     authCodeStorage: AuthCodeStorage
 ) {
-    val code = request.code
-    val clientId = request.clientId  // Optional with PKCE
-    val redirectUri = request.redirectUri
-    val codeVerifier = request.codeVerifier
-
-    // Validate required parameters (client_id optional with PKCE)
-    if (code == null || redirectUri == null || codeVerifier == null) {
-        val error = OAuthError(
-            error = OAuthError.INVALID_REQUEST,
-            errorDescription = "code, redirect_uri, and code_verifier are required"
-        )
-        call.respond(HttpStatusCode.BadRequest, error)
-        return
-    }
-
     // Consume and validate authorization code
-    val authCode = authCodeStorage.consume(code)
+    val authCode = authCodeStorage.consume(request.code)
     if (authCode == null) {
         val error = OAuthError(
             error = OAuthError.INVALID_GRANT,
@@ -218,18 +127,8 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
         return
     }
 
-    // Verify client_id matches (if provided)
-    if (clientId != null && authCode.clientId != clientId) {
-        val error = OAuthError(
-            error = OAuthError.INVALID_GRANT,
-            errorDescription = "client_id does not match authorization code"
-        )
-        call.respond(HttpStatusCode.BadRequest, error)
-        return
-    }
-
     // Verify redirect_uri matches
-    if (authCode.redirectUri != redirectUri) {
+    if (authCode.redirectUri != request.redirectUri) {
         val error = OAuthError(
             error = OAuthError.INVALID_GRANT,
             errorDescription = "redirect_uri does not match authorization request"
@@ -239,7 +138,7 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
     }
 
     // Verify PKCE code_verifier (this proves the caller is legitimate)
-    if (!verifyPkce(codeVerifier, authCode.codeChallenge, authCode.codeChallengeMethod)) {
+    if (!verifyPkce(request.codeVerifier, authCode.codeChallenge, authCode.codeChallengeMethod)) {
         val error = OAuthError(
             error = OAuthError.INVALID_GRANT,
             errorDescription = "PKCE verification failed"
@@ -251,15 +150,31 @@ private suspend fun RoutingContext.handleAuthorizationCodeGrant(
     // Get token configuration from local auth server
     val registry = call.application.oauth
     val localAuthServer = registry.localAuthServer
+
+    // Validate client credentials if configured (RFC 6749 Section 2.3)
+    // For confidential clients, client_secret is required at /token
+    // For public clients (open registration), client_secret is null and allowed
+    val credentialsValidator = localAuthServer?.clientsConfig?.credentialsValidator
+    if (credentialsValidator != null) {
+        val clientId = request.clientId ?: authCode.identity.client.clientId
+        val context = RequestContext(call.request, authCode.identity.providerName)
+        if (!context.credentialsValidator(clientId, request.clientSecret)) {
+            val error = OAuthError(
+                error = OAuthError.INVALID_CLIENT,
+                errorDescription = "Client authentication failed"
+            )
+            call.respond(HttpStatusCode.Unauthorized, error)
+            return
+        }
+    }
     val expiration = localAuthServer?.tokenExpiration ?: serverConfig.tokenExpiration
 
     // Get token issuer
     val tokenIssuer = registry.getTokenIssuer()
         ?: error("Token issuer not configured")
 
-    // Pass claims from auth code to be embedded in the JWT
-    // Use client_id from stored auth code (request.clientId may be null with PKCE)
-    issueTokenResponse(tokenIssuer, authCode.clientId, authCode.jti, request.clientName, authCode.scope, expiration, authCode.claims)
+    // Use the full identity from stored auth code (includes clientId, clientName, jti)
+    issueTokenResponse(tokenIssuer, authCode.identity, authCode.scope, expiration, authCode.claims)
 }
 
 /**
